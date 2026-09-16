@@ -32,8 +32,6 @@ export interface SidebarPanelLayoutEntry {
 	visible: boolean;
 }
 export type SidebarPanelLayout = SidebarPanelLayoutEntry[];
-/** Legacy menu vocabulary. Ornament is translated to Brand visibility. */
-export type Ornament = "none" | "restrained";
 export type ConfigurationSource = "product" | "user" | "project" | "session";
 export interface TodoItem {
 	id: number;

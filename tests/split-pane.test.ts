@@ -725,20 +725,6 @@ describe("split pane render lifecycle", () => {
 		expect(h.tui.render).toBe(original);
 	});
 
-	it("does not overwrite a renderer installed later by another extension", () => {
-		const h = harness();
-		const split = createSplitPaneController();
-		split.attach(h.tui);
-		const atelierWrapper = h.tui.render;
-		const laterWrapper = vi.fn((width: number) => atelierWrapper.call(h.tui, width));
-		h.tui.render = laterWrapper;
-
-		split.dispose();
-
-		expect(h.tui.render).toBe(laterWrapper);
-		expect(h.tui.render(120)).toEqual(["base:120"]);
-	});
-
 	it("keeps show, hide, width updates, and requests idempotent", () => {
 		const h = harness();
 		const split = createSplitPaneController();

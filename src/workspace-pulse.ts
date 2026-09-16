@@ -129,16 +129,6 @@ export function createWorkspacePulseRefresh(options: WorkspacePulseRefreshOption
 	};
 }
 
-const EMPTY_SNAPSHOT: WorkspacePulseSnapshot = {
-	trackedFiles: 0,
-	untrackedFiles: 0,
-	linesAdded: 0,
-	linesRemoved: 0,
-	binaryFiles: 0,
-	submodules: 0,
-	conflicts: 0,
-};
-
 function hasGitMarker(cwd: string): boolean {
 	let current = nodePath.resolve(cwd);
 	while (true) {
@@ -299,7 +289,6 @@ async function inspectWorkspacePulseUnchecked(
 		relativeCwd: toDisplayPath(nodePath.relative(root, options.cwd), nodePath.sep),
 		...(parsedStatus.branch ? { branch: parsedStatus.branch } : {}),
 		snapshot: {
-			...EMPTY_SNAPSHOT,
 			trackedFiles: parsedStatus.trackedFiles,
 			untrackedFiles: parsedStatus.untrackedFiles,
 			conflicts: parsedStatus.conflicts,

@@ -22,7 +22,6 @@ import {
 	getDisplaySettingsViewportHeight,
 	type SidebarPanelSetting,
 } from "./settings-workspace.js";
-import { applyDisplayTemplate, reorderSegment, toggleSegmentVisibility } from "./display.js";
 import {
 	createLifecycleOverlayComponent,
 	createOverlaySettlement,
@@ -31,7 +30,7 @@ import {
 	type RetirableLifecycleOverlayComponent,
 } from "./overlay-lifecycle.js";
 import type { AtelierRuntime } from "./state.js";
-import type { AtelierConfig, Ornament, SegmentId, TemplateName } from "./types.js";
+import type { AtelierConfig } from "./types.js";
 
 export type { OverlayLifetime } from "./overlay-lifecycle.js";
 export type SaveConfigPatch = typeof saveUserConfigPatch;
@@ -129,10 +128,7 @@ export function renderMenuFrame(theme: MenuTheme, lines: string[], width: number
 export function createMenuActions(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
-	runtime: Pick<
-		AtelierRuntime,
-		"getConfig" | "setConfig" | "getDisplaySettings" | "setSessionDisplayPatch" | "refreshUsage"
-	>,
+	runtime: Pick<AtelierRuntime, "getConfig" | "setConfig" | "refreshUsage">,
 	userConfigPath: string,
 	savePatch: SaveConfigPatch = saveUserConfigPatch,
 	options: MenuActionsOptions = {},
@@ -195,21 +191,6 @@ export function createMenuActions(
 				notify(`Could not change tools: ${error instanceof Error ? error.message : String(error)}`, "error");
 			}
 		},
-		setPreset(preset: TemplateName): void {
-			runtime.setSessionDisplayPatch(applyDisplayTemplate(preset));
-		},
-		setDensity(density: AtelierConfig["density"]): void {
-			runtime.setSessionDisplayPatch({ density });
-		},
-		setOrnament(ornament: Ornament): void {
-			runtime.setSessionDisplayPatch({
-				segmentLayout: toggleSegmentVisibility(
-					runtime.getDisplaySettings().segmentLayout,
-					"brand",
-					ornament === "restrained",
-				),
-			});
-		},
 		async setShowSidebarOnStartup(enabled: boolean): Promise<void> {
 			if (!isActive()) return;
 			const previous = runtime.getConfig();
@@ -243,40 +224,6 @@ export function createMenuActions(
 						error instanceof Error ? error.message : String(error)
 					}`,
 					"warning",
-				);
-			}
-		},
-		moveSegment(id: SegmentId, direction: "earlier" | "later"): void {
-			runtime.setSessionDisplayPatch({
-				segmentLayout: reorderSegment(runtime.getDisplaySettings().segmentLayout, id, direction),
-			});
-		},
-		setSegments(segments: SegmentId[]): void {
-			const selected = new Set(segments);
-			let layout = runtime
-				.getDisplaySettings()
-				.segmentLayout.map((entry) => ({ ...entry, visible: selected.has(entry.id) }));
-			layout = toggleSegmentVisibility(layout, "metrics", true);
-			layout = toggleSegmentVisibility(layout, "context", true);
-			runtime.setSessionDisplayPatch({ segmentLayout: layout });
-		},
-		toggleSegment(id: SegmentId): void {
-			runtime.setSessionDisplayPatch({
-				segmentLayout: toggleSegmentVisibility(runtime.getDisplaySettings().segmentLayout, id),
-			});
-		},
-		async saveDisplayDefaults(): Promise<void> {
-			if (!isActive()) return;
-			try {
-				const display = runtime.getDisplaySettings();
-				await savePatch(userConfigPath, display);
-				if (!isActive()) return;
-				notify("Pi Atelier display defaults saved", "info");
-			} catch (error) {
-				if (!isActive()) return;
-				notify(
-					`Could not save Atelier settings: ${error instanceof Error ? error.message : String(error)}`,
-					"error",
 				);
 			}
 		},

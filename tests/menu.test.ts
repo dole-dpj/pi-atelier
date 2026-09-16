@@ -15,7 +15,6 @@ vi.mock("@earendil-works/pi-tui", async (importOriginal) => {
 	};
 });
 
-import { derivePresetIdentity } from "../src/display.js";
 import {
 	createMenuActions,
 	openAtelierControlCenter,
@@ -23,7 +22,7 @@ import {
 	renderMenuFrame,
 	type SidebarControls,
 } from "../src/menu.js";
-import { DEFAULT_CONFIG, type DisplayPatch } from "../src/types.js";
+import { DEFAULT_CONFIG } from "../src/types.js";
 import { getDisplaySettingsViewportHeight } from "../src/settings-workspace.js";
 
 function deferred<T>() {
@@ -59,10 +58,6 @@ function harness() {
 				visible: entry.visible,
 			})),
 		),
-		setSessionDisplayPatch: vi.fn((patch: DisplayPatch) => {
-			config = { ...config, ...patch };
-			config.preset = derivePresetIdentity(config);
-		}),
 		setConfig: vi.fn((next) => {
 			config = next;
 		}),
@@ -388,43 +383,6 @@ describe("Control Center presentation", () => {
 });
 
 describe("menu actions", () => {
-	it.each([
-		["editorial", ["activity", "metrics", "context", "model", "git", "statuses", "menu"]],
-		["minimal", ["activity", "metrics", "context", "model", "menu"]],
-		["classic", ["metrics", "context", "model", "git", "statuses"]],
-	] as const)("applies the complete %s template", (preset, visible) => {
-		const h = harness();
-		h.actions.setPreset(preset);
-		expect(h.runtime.getConfig().segmentLayout).toHaveLength(9);
-		expect(
-			h.runtime
-				.getConfig()
-				.segmentLayout.filter((entry) => entry.visible)
-				.map((entry) => entry.id),
-		).toEqual(visible);
-		expect(h.runtime.getConfig().preset).toBe(preset);
-	});
-
-	it("toggles in place, protects required entries, and reorders across hidden neighbors", () => {
-		const h = harness();
-		const initialOrder = h.runtime.getConfig().segmentLayout.map((entry) => entry.id);
-		h.actions.toggleSegment("performance");
-		h.actions.toggleSegment("metrics");
-		expect(h.runtime.getConfig().segmentLayout.map((entry) => entry.id)).toEqual(initialOrder);
-		expect(h.runtime.getConfig().segmentLayout.find((entry) => entry.id === "performance")?.visible).toBe(
-			true,
-		);
-		expect(h.runtime.getConfig().segmentLayout.find((entry) => entry.id === "metrics")?.visible).toBe(true);
-		h.actions.moveSegment("context", "earlier");
-		expect(
-			h.runtime
-				.getConfig()
-				.segmentLayout.map((entry) => entry.id)
-				.slice(2, 5),
-		).toEqual(["metrics", "context", "performance"]);
-		expect(h.runtime.getConfig().preset).toBe("custom");
-	});
-
 	it("keeps the prior model when authentication fails", async () => {
 		const h = harness();
 		h.pi.setModel.mockResolvedValue(false);
@@ -486,51 +444,12 @@ describe("menu actions", () => {
 		expect(h.ctx.ui.notify).toHaveBeenCalledWith("Sidebar will start hidden", "info");
 	});
 
-	it("persists only completion notifications while display changes remain session-scoped", async () => {
+	it("persists only completion notifications", async () => {
 		const h = harness();
-		h.actions.setPreset("minimal");
 		await h.actions.setCompletionNotifications(false);
 		expect(h.runtime.getConfig().completionNotifications).toBe(false);
 		expect(h.savePatch).toHaveBeenCalledWith("/tmp/user.json", { completionNotifications: false });
 		expect(h.ctx.ui.notify).toHaveBeenCalledWith("Completion notifications disabled", "info");
-	});
-
-	it("persists display changes only after explicit save", async () => {
-		const h = harness();
-		h.actions.setPreset("minimal");
-		await h.actions.saveDisplayDefaults();
-		expect(h.savePatch).toHaveBeenCalledWith("/tmp/user.json", h.runtime.getDisplaySettings());
-	});
-
-	it("restores the ornament-free Status Rail defaults when selecting editorial", () => {
-		const h = harness();
-		h.actions.setPreset("minimal");
-		h.actions.setDensity("compact");
-		h.actions.setOrnament("restrained");
-		h.actions.setPreset("editorial");
-		expect(h.runtime.getConfig()).toMatchObject({
-			preset: "editorial",
-			segmentLayout: DEFAULT_CONFIG.segmentLayout,
-			density: "comfortable",
-		});
-	});
-
-	it("maps classic to its compatible segments and presentation", () => {
-		const h = harness();
-		h.actions.setPreset("minimal");
-		h.actions.setDensity("compact");
-		h.actions.setOrnament("restrained");
-		h.actions.setPreset("classic");
-		expect(h.runtime.getConfig()).toMatchObject({
-			preset: "classic",
-			density: "comfortable",
-		});
-		expect(
-			h.runtime
-				.getConfig()
-				.segmentLayout.filter((entry) => entry.visible)
-				.map((entry) => entry.id),
-		).toEqual(["metrics", "context", "model", "git", "statuses"]);
 	});
 
 	it("renames a session only after non-empty input", async () => {
@@ -560,17 +479,6 @@ describe("menu actions", () => {
 		h.actions.setTools(["bash"]);
 		expect(h.pi.setActiveTools).toHaveBeenLastCalledWith(["read"]);
 		expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("tool failure"), "error");
-	});
-
-	it("updates density, ornament, and segment order through display controls", () => {
-		const h = harness();
-		h.actions.setDensity("compact");
-		h.actions.setOrnament("none");
-		h.actions.moveSegment("context", "earlier");
-		expect(h.runtime.getConfig()).toMatchObject({ density: "compact", preset: "custom" });
-		expect(h.runtime.getConfig().segmentLayout.findIndex((entry) => entry.id === "context")).toBeLessThan(
-			h.runtime.getConfig().segmentLayout.findIndex((entry) => entry.id === "performance"),
-		);
 	});
 
 	it("does not compact without confirmation", async () => {

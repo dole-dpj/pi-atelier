@@ -1,6 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type {
-	ConfigurationSource,
 	ContributedSidebarPanelId,
 	SidebarPanelId,
 	SidebarPanelLayout,
@@ -112,7 +111,6 @@ export interface SidebarPanelData extends Omit<SidebarPanelContribution, "rows">
 	source: string;
 }
 
-export type SidebarPanelLayoutSource = ConfigurationSource;
 export type { SidebarPanelLayout, SidebarPanelLayoutEntry };
 
 export interface SidebarPanelRegisterEvent {
@@ -216,10 +214,6 @@ function isSafeRevision(value: unknown): value is number {
 
 export function isSidebarPanelRole(value: unknown): value is SidebarPanelRole {
 	return typeof value === "string" && PANEL_ROLES.has(value);
-}
-
-export function cloneSidebarPanelLayout(layout: readonly SidebarPanelLayoutEntry[]): SidebarPanelLayout {
-	return layout.map((entry) => ({ id: entry.id, visible: entry.visible }));
 }
 
 /**

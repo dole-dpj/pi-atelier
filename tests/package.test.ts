@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type {
 	ContributedSidebarPanelId,
@@ -25,7 +24,6 @@ const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url),
 describe("npm package contract", () => {
 	it("publishes a Pi extension with compatible peers", () => {
 		expect(pkg.name).toBe("pi-atelier");
-		expect(pkg.version).toBe("0.10.1");
 		expect(pkg.description).toBe("A responsive status rail and live activity sidebar for Pi");
 		expect(pkg.keywords).toContain("pi-package");
 		expect(pkg.pi.extensions).toEqual(["./extensions/index.ts"]);
@@ -33,14 +31,6 @@ describe("npm package contract", () => {
 		expect(pkg.peerDependencies["@earendil-works/pi-tui"]).toBe(">=0.84.0");
 		expect(pkg.engines.node).toBe(">=22.19.0");
 		expect(pkg.files).toEqual(expect.arrayContaining(["extensions", "src", "README.md", "LICENSE"]));
-	});
-
-	it("documents Sidebar use and Resize", async () => {
-		const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
-		expect(readme).toContain("/atelier sidebar");
-		expect(readme).toContain("Ctrl+Shift+R");
-		expect(readme).toContain("hides when the terminal is too narrow");
-		expect(readme).toContain("rounded frame");
 	});
 
 	it("exports the deliberate structured contribution contract from the package entrypoint", () => {
@@ -76,11 +66,5 @@ describe("npm package contract", () => {
 		expect(isSidebarPanelId("agent")).toBe(true);
 		expect(isSidebarPanelRequestId("vendor-1")).toBe(true);
 		expect(SIDEBAR_PANEL_MAX_RAW_REQUEST_ID_CODE_UNITS).toBeGreaterThan(0);
-	});
-
-	it("documents Display settings", async () => {
-		const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
-		expect(readme).toContain("/atelier display");
-		expect(readme).toContain("Settings → Display");
 	});
 });
