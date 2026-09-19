@@ -458,6 +458,25 @@ describe("Pi 0.84 split layout", () => {
 		renderer.stop();
 	});
 
+	it("reports a scroll region only for the fullscreen split layout", () => {
+		const regular = createSplitPaneController();
+		regular.attach(stableTuiReference(() => new TuiMainScreen() as unknown as TUI));
+		expect(regular.isScrollRegion()).toBe(false);
+		regular.show();
+		expect(regular.isScrollRegion()).toBe(false);
+		regular.dispose();
+
+		const renderer = new TuiAltScreen({ columns: 120, rows: 36, write: vi.fn() } as never);
+		const split = createSplitPaneController();
+		split.attach(stableTuiReference(() => renderer));
+		expect(split.isScrollRegion()).toBe(false);
+		split.show();
+		expect(split.isScrollRegion()).toBe(true);
+		split.hide();
+		expect(split.isScrollRegion()).toBe(false);
+		split.dispose();
+	});
+
 	it("reserves fullscreen layout columns without wrapping render", () => {
 		const renderer = new TuiAltScreen({ columns: 120, rows: 36, write: vi.fn() } as never);
 		const widths: number[] = [];

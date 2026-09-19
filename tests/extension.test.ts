@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { initTheme } from "@earendil-works/pi-coding-agent";
+import { Container, VStack } from "@earendil-works/pi-tui";
 import atelierExtension, {
 	SIDEBAR_PANEL_EVENT_CHANNEL,
 	type AtelierExtensionDependencies,
@@ -47,6 +48,7 @@ function harness(
 	const shortcuts: string[] = [];
 	const shortcutHandlers = new Map<string, (ctx: any) => Promise<void> | void>();
 	const setFooter = vi.fn();
+	const setWidget = vi.fn();
 	const setEditorComponent = vi.fn();
 	let terminalInput: ((data: string) => unknown) | undefined;
 	let terminalInputUnsubscribe = vi.fn();
@@ -144,6 +146,7 @@ function harness(
 		},
 		ui: {
 			setFooter,
+			setWidget,
 			setEditorComponent,
 			notify: vi.fn(),
 			theme: {},
@@ -177,6 +180,7 @@ function harness(
 		shortcuts,
 		shortcutHandlers,
 		setFooter,
+		setWidget,
 		setEditorComponent,
 		ctx,
 		pi,
@@ -306,7 +310,7 @@ describe("extension registration", () => {
 				sidebarPanelLayout: [
 					{ id: "vendor:queue", visible: true },
 					...Array.from({ length: 8 }, (_, index) => ({
-						id: ["agent", "activity", "alerts", "todos", "context", "workspace", "usage", "tools"][index],
+						id: ["agent", "activity", "statuses", "todos", "context", "workspace", "usage", "tools"][index],
 						visible: false,
 					})),
 				],
@@ -381,6 +385,80 @@ describe("extension registration", () => {
 		await start(h, replacementContext(h.ctx, "Replacement session"));
 
 		expect(h.pi.registerShortcut.mock.calls.filter(([key]) => key === "ctrl+shift+r")).toHaveLength(1);
+	});
+
+	it("installs the Status Rail hidden while keeping sidebar state flowing", async () => {
+		const h = harness();
+		await start(h);
+		const footer = renderFooter(
+			h.setFooter.mock.calls[0]?.[0],
+			vi.fn(),
+			() => new Map([["ext", "indexing failed"]]),
+		);
+		expect(footer.render(120)).toEqual([]);
+		expect(renderOverlayText(h)).toContain("indexing failed");
+	});
+
+	it("reserves the footer's dock row while keeping the footer rendering", async () => {
+		const h = harness();
+		await start(h);
+		const container = new Container();
+		const dock = new VStack([
+			{ component: { render: () => ["EDITOR"], invalidate() {} }, shrink: 1, minSize: 3 },
+			{ component: container, shrink: 1, minSize: 1 },
+		]);
+		const component = h.setFooter.mock.calls[0]?.[0](
+			{ requestRender: vi.fn(), layoutRoot: dock },
+			FOOTER_THEME,
+			{
+				getGitBranch: () => undefined,
+				getExtensionStatuses: () => new Map(),
+				onBranchChange: () => () => undefined,
+			},
+		);
+		container.addChild(component);
+		await Promise.resolve();
+		const entries = (dock as unknown as { entries: Array<{ minSize?: number }> }).entries;
+		expect(component.render(120)).toEqual([]);
+		expect(entries[1]?.minSize).toBe(0);
+	});
+
+	it("suppresses the rpiv-todo overlay above the editor", async () => {
+		vi.useFakeTimers();
+		try {
+			const h = harness();
+			await start(h);
+			await vi.advanceTimersByTimeAsync(3_000);
+			h.setWidget.mockClear();
+
+			await h.handlers.get("tool_execution_end")?.(
+				{
+					type: "tool_execution_end",
+					toolCallId: "todo-1",
+					toolName: "todo",
+					result: { output: "" },
+				},
+				h.ctx,
+			);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(h.setWidget).toHaveBeenCalledWith("rpiv-todos", undefined);
+
+			await vi.advanceTimersByTimeAsync(3_000);
+			h.setWidget.mockClear();
+			await h.handlers.get("tool_execution_end")?.(
+				{
+					type: "tool_execution_end",
+					toolCallId: "write-1",
+					toolName: "write",
+					result: { output: "" },
+				},
+				h.ctx,
+			);
+			await vi.advanceTimersByTimeAsync(3_000);
+			expect(h.setWidget).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("does not install terminal UI outside TUI mode", async () => {
@@ -723,7 +801,8 @@ describe("extension registration", () => {
 			vi.fn(),
 			() => new Map([["stale", "retired extension failed"]]),
 		);
-		expect(footer.render(120).join("\n")).toContain("retired extension failed");
+		expect(footer.render(120)).toEqual([]);
+		expect(renderOverlayText(h)).toContain("retired extension failed");
 		expect(renderOverlayText(h)).toContain("Retired TODO");
 		h.overlays[0]?.done.mockImplementation(() => {
 			throw new Error("overlay close failed");
@@ -1333,7 +1412,7 @@ describe("extension registration", () => {
 			const unsubscribe = vi.fn();
 			const component = value({ requestRender }, FOOTER_THEME, {
 				getGitBranch: () => undefined,
-				getExtensionStatuses: () => new Map([["live", "live footer"]]),
+				getExtensionStatuses: () => new Map([["live", "live footer failed"]]),
 				onBranchChange: (onChange: () => void) => {
 					branchChange = onChange;
 					return unsubscribe;
@@ -1346,11 +1425,12 @@ describe("extension registration", () => {
 		expect(mounted).toHaveLength(1);
 		const oldFooter = mounted[0];
 		expect(oldFooter).toBeDefined();
-		expect(oldFooter?.component.render(120).join("\n")).toContain("live footer");
+		expect(oldFooter?.component.render(120)).toEqual([]);
+		expect(renderOverlayText(h)).toContain("live footer failed");
 
 		await expect(command(h, "disable")).resolves.toBeUndefined();
 		expect(oldFooter?.unsubscribe).toHaveBeenCalledOnce();
-		expect(oldFooter?.component.render(120).join("\n")).not.toContain("live footer");
+		expect(oldFooter?.component.render(120)).toEqual([]);
 		oldFooter?.branchChange();
 		expect(oldFooter?.requestRender).not.toHaveBeenCalled();
 
@@ -1376,7 +1456,8 @@ describe("extension registration", () => {
 			vi.fn(),
 			() => new Map([["one", "atelier index failed"]]),
 		);
-		expect(footer.render(120).join("\n")).toContain("atelier index failed");
+		expect(footer.render(120)).toEqual([]);
+		expect(renderOverlayText(h)).toContain("atelier index failed");
 		// Pi disposes the mounted footer inside `setFooter`; if that throws, the old footer stays live.
 		h.setFooter.mockImplementation((value: unknown) => {
 			if (value === undefined) throw new Error("footer removal failed");
@@ -1384,7 +1465,7 @@ describe("extension registration", () => {
 		await h.handlers.get("session_shutdown")?.({ reason: "quit" }, h.ctx);
 
 		expect(() => footer.render(120)).not.toThrow();
-		expect(footer.render(120).join("\n")).not.toContain("atelier index failed");
+		expect(footer.render(120)).toEqual([]);
 	});
 
 	it("does not publish an initializer that completes after shutdown", async () => {
@@ -1586,7 +1667,7 @@ describe("extension registration", () => {
 					"vendor:missing",
 					"agent",
 					"activity",
-					"alerts",
+					"statuses",
 					"todos",
 					"context",
 					"workspace",
@@ -1797,12 +1878,12 @@ describe("extension registration", () => {
 			},
 		);
 		const footerText = footer.render(160).join("\n");
-		expect(footerText).toContain("●");
+		expect(footerText).toBe("");
 		expect(footerText).not.toContain("bash");
 		expect(footerText).not.toContain("npm test");
 	});
 
-	it("renders live response performance in the configured footer", async () => {
+	it("renders live response performance in the sidebar activity panel", async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(1_000);
 		try {
@@ -1832,7 +1913,9 @@ describe("extension registration", () => {
 					onBranchChange: () => () => undefined,
 				},
 			);
-			expect(footer.render(160).join("\n")).toContain("TTFT ~ · TPS ~");
+			const sidebarText = () => h.overlays[0]?.component.render(44).join("\n") ?? "";
+			footer.render(160);
+			expect(sidebarText()).toContain("TTFT ~ · TPS ~");
 
 			vi.setSystemTime(1_100);
 			await h.handlers.get("before_provider_request")?.(
@@ -1850,7 +1933,8 @@ describe("extension registration", () => {
 			);
 
 			expect(footerRequestRender).toHaveBeenCalled();
-			expect(footer.render(160).join("\n")).toContain("TTFT 820ms · TPS ~");
+			footer.render(160);
+			expect(sidebarText()).toContain("TTFT 820ms · TPS ~");
 
 			vi.setSystemTime(2_920);
 			await h.handlers.get("message_update")?.(
@@ -1861,7 +1945,8 @@ describe("extension registration", () => {
 				},
 				h.ctx,
 			);
-			expect(footer.render(160).join("\n")).toContain("TTFT 820ms · TPS ~20.0");
+			expect(footer.render(160)).toEqual([]);
+			expect(sidebarText()).toContain("TTFT 820ms · TPS ~20.0");
 
 			vi.setSystemTime(4_420);
 			await h.handlers.get("message_end")?.(
@@ -1871,7 +1956,8 @@ describe("extension registration", () => {
 				},
 				h.ctx,
 			);
-			expect(footer.render(160).join("\n")).toContain("TTFT 820ms · TPS 48.0");
+			expect(footer.render(160)).toEqual([]);
+			expect(sidebarText()).toContain("TTFT 820ms · TPS 48.0");
 			workspace.handleInput("\u001b");
 			await opening;
 		} finally {

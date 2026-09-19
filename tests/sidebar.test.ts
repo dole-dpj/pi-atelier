@@ -1,4 +1,4 @@
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, ScrollView, TuiAltScreen, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_RUN_ACTIVITY, type RunActivitySnapshot } from "../src/run-activity.js";
 import {
@@ -1209,6 +1209,19 @@ describe("sidebar snapshot and layout", () => {
 		}
 	});
 
+	it("prefers the model name over the model id in the agent panel", () => {
+		const namedRows = contentRows(
+			renderSidebarLines({ ...snapshot(), modelName: "GPT-5.6 Sol" }, DEFAULT_CONFIG, theme, 44, 36, false),
+		);
+		expect(namedRows).toContainEqual(expect.stringMatching(/GPT-5\.6 Sol/));
+		expect(namedRows.join("\n")).not.toContain("gpt-5.6-sol");
+
+		const unnamedRows = contentRows(
+			renderSidebarLines({ ...snapshot(), modelName: "" }, DEFAULT_CONFIG, theme, 44, 36, false),
+		);
+		expect(unnamedRows).toContainEqual(expect.stringMatching(/gpt-5\.6-sol/));
+	});
+
 	it("renders a compact segmented context meter that adapts to width", () => {
 		const narrow = contentRows(renderSidebarLines(snapshot(), DEFAULT_CONFIG, theme, 28, 36, false));
 		const narrowContext = narrow.indexOf("CONTEXT");
@@ -1879,7 +1892,7 @@ describe("sidebar snapshot and layout", () => {
 		expect(rows).toEqual(expect.not.arrayContaining([expect.stringMatching(/^STATUS /)]));
 	});
 
-	it("shows only sanitized warning and error extension statuses", () => {
+	it("sanitizes extension statuses before listing them in STATUSES", () => {
 		const statusSnapshot = buildSidebarSnapshot({
 			state: { ...state, extensionStatuses: [] },
 			cwd: "/tmp/project",
@@ -1888,20 +1901,49 @@ describe("sidebar snapshot and layout", () => {
 			availableToolCount: 12,
 			extensionStatuses: ["tests \u001b[31mpassing", "api\nready", "sync warning", "index failed", "   "],
 		});
-		const rows = contentRows(renderSidebarLines(statusSnapshot, DEFAULT_CONFIG, theme, 44, 36, false));
-		expect(rows).toContain("ALERTS");
-		expect(rows).toContain("▲ sync warning");
-		expect(rows).toContain("✕ index failed");
-		expect(rows).not.toContain("tests passing");
-		expect(rows).not.toContain("api ready");
+		const rows = contentRows(renderSidebarLines(statusSnapshot, DEFAULT_CONFIG, theme, 44, 64, false));
+		const statuses = rows.slice(rows.indexOf("STATUSES") + 1);
+		expect(statuses).toContain("· tests passing");
+		expect(statuses).toContain("· api ready");
+		expect(statuses).toContain("▲ sync warning");
+		expect(statuses).toContain("✕ index failed");
+		// Whitespace-only statuses never reach a row.
+		expect(statuses.filter((row) => /^[·▲✕] /.test(row))).toHaveLength(4);
 		expect(rows.join("\n")).not.toContain("[31m");
 	});
 
-	it("suppresses routine healthy extension statuses", () => {
-		const rows = contentRows(renderSidebarLines(snapshot(), DEFAULT_CONFIG, theme, 44, 36, false));
-		expect(rows).toContainEqual(expect.stringMatching(/^8 \/ 12 active\s+▸$/));
-		expect(rows).not.toContain("tests passing");
-		expect(rows).not.toContain("ALERTS");
+	it("lists every extension status in STATUSES, including healthy ones", () => {
+		const pluginSnapshot = buildSidebarSnapshot({
+			state: { ...state, extensionStatuses: [] },
+			cwd: "/tmp/project",
+			branchEntryCount: 6,
+			activeToolCount: 8,
+			availableToolCount: 12,
+			extensionStatuses: ["● read:pi-atelier:idle", "yolo", "sync warning", "   "],
+		});
+		const rows = contentRows(renderSidebarLines(pluginSnapshot, DEFAULT_CONFIG, theme, 44, 64, false));
+		const statuses = rows.slice(rows.indexOf("STATUSES") + 1);
+		expect(statuses).toContain("· ● read:pi-atelier:idle");
+		expect(statuses).toContain("· yolo");
+		expect(statuses).toContain("▲ sync warning");
+		expect(statuses.indexOf("· ● read:pi-atelier:idle")).toBeLessThan(statuses.indexOf("· yolo"));
+
+		const longStatus = buildSidebarSnapshot({
+			state: { ...state, extensionStatuses: [] },
+			cwd: "/tmp/project",
+			branchEntryCount: 6,
+			activeToolCount: 8,
+			availableToolCount: 12,
+			extensionStatuses: ["● read:very-long-project-bank-identifier:queue:1234"],
+		});
+		const longLines = renderSidebarLines(longStatus, DEFAULT_CONFIG, theme, 44, 64, false);
+		expect(longLines.every((line) => visibleWidth(line) <= 44)).toBe(true);
+		expect(
+			longLines
+				.find((line) => line.includes("read:very-long-project"))
+				?.trimEnd()
+				.endsWith("│"),
+		).toBe(true);
 	});
 
 	it("keeps only the required hierarchy in a compact 12 row rail", () => {
@@ -1987,6 +2029,43 @@ describe("sidebar snapshot and layout", () => {
 		expect(rows.some((row) => row.includes("Visible TODO"))).toBe(true);
 	});
 
+	it("keeps every panel in a scroll region instead of dropping panels to fit", () => {
+		const populated = {
+			...snapshot(),
+			todos: [{ id: 1, text: "Scrollable TODO", status: "pending" as const }],
+		};
+		const panels = ["AGENT", "ACTIVITY", "TODOS", "STATUSES", "CONTEXT", "WORKSPACE", "USAGE", "TOOLS"];
+		const clipped = contentRows(renderSidebarLines(populated, DEFAULT_CONFIG, theme, 44, 20, false, 0));
+		expect(panels.filter((panel) => !clipped.includes(panel))).not.toHaveLength(0);
+
+		const scrolled = renderSidebarLines(populated, DEFAULT_CONFIG, theme, 44, 20, false, 0, false, true);
+		const scrolledRows = contentRows(scrolled);
+		for (const panel of panels) {
+			expect(scrolledRows).toContain(panel);
+		}
+		expect(scrolled.length).toBeGreaterThan(20);
+		expect(scrolled.every((line) => visibleWidth(line) <= 44)).toBe(true);
+		// The reserved scrollbar column is part of the dock's own rows, ending with an explicit
+		// default background, so the neighbouring region cannot show through it.
+		for (const line of scrolled) {
+			expect(visibleWidth(line)).toBe(44);
+			expect(line.endsWith("\u001b[49m ")).toBe(true);
+		}
+		const crown = stripAnsi(scrolled.find((line) => line.includes("AGENT")) ?? "");
+		expect(crown.charAt(42)).toBe("╮");
+		expect(crown.charAt(43)).toBe(" ");
+		// Scrolling to the end lines the last panel up with the editor, with no blank tail row.
+		expect(
+			stripAnsi(scrolled.at(-1) ?? "")
+				.trimEnd()
+				.endsWith("╯"),
+		).toBe(true);
+		// Content shorter than the viewport still fills it, so no stale rows survive a redraw.
+		expect(renderSidebarLines(populated, DEFAULT_CONFIG, theme, 44, 200, false, 0, false, true)).toHaveLength(
+			200,
+		);
+	});
+
 	it("shows the Agent panel when showSidebarAgent is true", () => {
 		const configWithAgent = { ...DEFAULT_CONFIG, showSidebarAgent: true };
 		const rows = contentRows(renderSidebarLines(snapshot(), configWithAgent, theme, 44, 36, false, 0));
@@ -2018,6 +2097,119 @@ describe("sidebar component and overlay", () => {
 
 		expect(component.render(44).join("\n")).toContain("RESIZE");
 		expect(fg).toHaveBeenCalledWith("warning", "│");
+	});
+
+	it("wraps the fullscreen Sidebar in a scroll region that keeps every panel", () => {
+		const renderer = new TuiAltScreen({ columns: 120, rows: 20, write: vi.fn() } as never);
+		renderer.requestRender = vi.fn();
+		const populated = {
+			...snapshot(),
+			todos: [{ id: 1, text: "Scrollable TODO", status: "pending" as const }],
+		};
+		let component: Component | undefined;
+		const custom = vi.fn((factory: (...args: any[]) => Component) => {
+			component = factory(renderer, theme, {}, vi.fn());
+			return new Promise<undefined>(() => undefined);
+		});
+		const controller = createSidebarController({
+			ctx: { mode: "tui", ui: { custom } } as never,
+			getSnapshot: () => populated,
+			getConfig: () => DEFAULT_CONFIG,
+		});
+
+		controller.show();
+
+		expect(component).toBeInstanceOf(ScrollView);
+		expect(contentRows(component!.render(44))).toContain("TODOS");
+		expect(component!.render(44).length).toBeGreaterThan(20);
+
+		// The rightmost column stays clear so a scrollbar never covers a panel frame, and the dock
+		// itself covers the whole region: a column reserved at the scroll level would stay unpainted
+		// and let the region next to it show through.
+		const lines = component!.render(44);
+		expect((component as ScrollView).getContentWidth(44)).toBe(44);
+		expect(lines.every((line) => visibleWidth(line) === 44)).toBe(true);
+		expect(lines.every((line) => stripAnsi(line).endsWith(" "))).toBe(true);
+		expect(lines.every((line) => line.endsWith("\u001b[49m "))).toBe(true);
+		expect(stripAnsi(lines.find((line) => line.includes("AGENT")) ?? "").trimEnd()).toMatch(/╮$/);
+
+		controller.hide();
+		controller.dispose();
+	});
+
+	it("scrolls the fullscreen Sidebar with the wheel under the pointer", () => {
+		const terminal = {
+			columns: 120,
+			rows: 20,
+			write: vi.fn(),
+			start: vi.fn(),
+			stop: vi.fn(),
+			hideCursor: vi.fn(),
+			showCursor: vi.fn(),
+		};
+		const renderer = new TuiAltScreen(terminal as never);
+		const transcript = new ScrollView(
+			{ render: () => Array.from({ length: 200 }, (_, index) => `line ${index}`), invalidate() {} },
+			{ follow: "end", primary: true, overscroll: "chain" },
+		);
+		renderer.setLayoutRoot(transcript);
+		renderer.start();
+		const populated = {
+			...snapshot(),
+			todos: [{ id: 1, text: "Scrollable TODO", status: "pending" as const }],
+		};
+		let component: Component | undefined;
+		const custom = vi.fn((factory: (...args: any[]) => Component, customOptions: any) => {
+			const created = factory(renderer, theme, {}, vi.fn());
+			component = created;
+			renderer.showOverlay(created, customOptions.overlayOptions());
+			return new Promise<undefined>(() => undefined);
+		});
+		const controller = createSidebarController({
+			ctx: { mode: "tui", ui: { custom } } as never,
+			getSnapshot: () => populated,
+			getConfig: () => DEFAULT_CONFIG,
+		});
+		controller.show();
+		renderer.renderNow();
+
+		const sidebar = component as ScrollView;
+		const wheel = (direction: number, x: number) =>
+			(
+				renderer as unknown as {
+					routeWheel: (event: { direction: number; x: number; y: number }) => void;
+				}
+			).routeWheel({ direction, x, y: 4 });
+		const sidebarColumn = terminal.columns - 10;
+
+		expect(sidebar).toBeInstanceOf(ScrollView);
+		expect(sidebar.scrollTop).toBe(0);
+		wheel(1, sidebarColumn);
+		expect(sidebar.scrollTop).toBe(1);
+		wheel(-1, sidebarColumn);
+		expect(sidebar.scrollTop).toBe(0);
+
+		// The Sidebar owns its column: a wheel at either edge must not leak into the transcript.
+		const transcriptTop = renderer.viewportTop;
+		wheel(-1, sidebarColumn);
+		expect(sidebar.scrollTop).toBe(0);
+		expect(renderer.viewportTop).toBe(transcriptTop);
+
+		sidebar.scrollToEnd();
+		const sidebarEnd = sidebar.scrollTop;
+		expect(sidebarEnd).toBeGreaterThan(0);
+		wheel(1, sidebarColumn);
+		expect(sidebar.scrollTop).toBe(sidebarEnd);
+		expect(renderer.viewportTop).toBe(transcriptTop);
+
+		// The transcript keeps its own scrolling under the pointer.
+		wheel(-1, 10);
+		expect(renderer.viewportTop).toBe(transcriptTop - 1);
+		expect(sidebar.scrollTop).toBe(sidebarEnd);
+
+		renderer.stop();
+		controller.hide();
+		controller.dispose();
 	});
 
 	it("reads live terminal height on every render without recreation", () => {

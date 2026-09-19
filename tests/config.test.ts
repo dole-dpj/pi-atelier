@@ -36,7 +36,7 @@ describe("configuration", () => {
 		expect(DEFAULT_CONFIG.sidebarPanelLayout.map((entry) => entry.id)).toEqual([
 			"agent",
 			"activity",
-			"alerts",
+			"statuses",
 			"todos",
 			"context",
 			"workspace",

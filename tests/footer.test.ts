@@ -1,7 +1,7 @@
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { Container, ScrollView, TuiAltScreen, VStack, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { DISPLAY_TEMPLATES, legacySegmentsToLayout } from "../src/display.js";
-import { createFooterComponent, renderFooterLine } from "../src/footer.js";
+import { createFooterComponent, renderFooterLine, reserveFooterRow } from "../src/footer.js";
 import { type AtelierConfig, type AtelierState, DEFAULT_CONFIG } from "../src/types.js";
 
 const plainTheme = {
@@ -164,6 +164,15 @@ describe("footer", () => {
 		}
 		expect(line).not.toMatch(/ATELIER|R5\.9M|CH98\.8|◔|✦|MENU/);
 		expect(visibleWidth(line)).toBe(160);
+	});
+
+	it("prefers the model name over the model id in the Status Rail", () => {
+		const named = renderFooterLine({ ...state, modelName: "GPT-5.6 Sol" }, DEFAULT_CONFIG, plainTheme, 160);
+		expect(stripAnsi(named)).toContain("GPT-5.6 Sol");
+		expect(stripAnsi(named)).not.toContain("gpt-5.6-sol");
+
+		const unnamed = renderFooterLine({ ...state, modelName: "" }, DEFAULT_CONFIG, plainTheme, 160);
+		expect(stripAnsi(unnamed)).toContain("gpt-5.6-sol");
 	});
 
 	it("right-aligns readable telemetry", () => {
@@ -632,6 +641,107 @@ describe("footer", () => {
 		expect(lines[0]).toContain("CLAUDING... · gpt-5.6-sol");
 		expect(lines[1]).toContain("CLAUDING..  · gpt-5.6-sol");
 		expect(lines[2]).toContain("CLAUDING.   · gpt-5.6-sol");
+	});
+
+	it("renders no Status Rail content while hidden but keeps the state pipeline running", () => {
+		vi.useFakeTimers();
+		const requestRender = vi.fn();
+		const getState = vi.fn(() => ({ ...state, activity: "working" as const, workingLabel: "CLAUDING" }));
+		const component = createFooterComponent({
+			getState,
+			getConfig: () => DEFAULT_CONFIG,
+			hidden: true,
+			requestRender,
+			onBranchChange: () => vi.fn(),
+			theme: plainTheme,
+		});
+
+		try {
+			expect(component.render(160)).toEqual([]);
+			expect(getState).toHaveBeenCalled();
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			component.dispose();
+			vi.useRealTimers();
+		}
+	});
+
+	it("reserves the dock's footer row away while the hidden footer keeps rendering", () => {
+		const container = new Container();
+		const editor = { render: () => ["EDITOR-1", "EDITOR-2", "EDITOR-3"], invalidate() {} };
+		const dock = new VStack([
+			{ component: editor, shrink: 1, minSize: 3 },
+			{ component: container, shrink: 1, minSize: 1 },
+		]);
+		const getState = vi.fn(() => state);
+		const component = createFooterComponent({
+			getState,
+			getConfig: () => DEFAULT_CONFIG,
+			hidden: true,
+			requestRender: vi.fn(),
+			onBranchChange: () => vi.fn(),
+			theme: plainTheme,
+		});
+		container.addChild(component);
+		const entries = (dock as unknown as { entries: Array<{ minSize?: number }> }).entries;
+		expect(entries[1]?.minSize).toBe(1);
+		expect(dock.render(20)).toHaveLength(4);
+
+		const reservation = reserveFooterRow({ layoutRoot: dock } as never, component);
+
+		// The footer keeps rendering (its factory is the only channel through which extension
+		// statuses reach the sidebar) while the dock no longer spends a row on it.
+		expect(entries[1]?.minSize).toBe(0);
+		expect(dock.render(20)).toHaveLength(3);
+		expect(getState).toHaveBeenCalled();
+
+		reservation.restore();
+		expect(entries[1]?.minSize).toBe(1);
+		expect(dock.render(20)).toHaveLength(4);
+
+		component.dispose();
+	});
+
+	it("keeps rendering the hidden footer inside the real fullscreen layout", () => {
+		const terminal = {
+			columns: 120,
+			rows: 24,
+			write: vi.fn(),
+			start: vi.fn(),
+			stop: vi.fn(),
+			hideCursor: vi.fn(),
+			showCursor: vi.fn(),
+		};
+		const renderer = new TuiAltScreen(terminal as never);
+		const transcript = new ScrollView(
+			{ render: () => Array.from({ length: 80 }, (_, index) => `line ${index}`), invalidate() {} },
+			{ follow: "end", primary: true },
+		);
+		const footer = { render: vi.fn(() => []), invalidate() {} };
+		const footerContainer = new Container();
+		footerContainer.addChild(footer);
+		const dock = new VStack([
+			{ component: { render: () => ["EDITOR"], invalidate() {} }, shrink: 1, minSize: 3 },
+			{ component: footerContainer, shrink: 1, minSize: 1 },
+		]);
+		renderer.setLayoutRoot(
+			new VStack([
+				{ component: transcript, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+				{ component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
+			]),
+		);
+		renderer.start();
+		reserveFooterRow(
+			{ layoutRoot: (renderer as unknown as { layoutRoot: unknown }).layoutRoot } as never,
+			footer,
+		);
+		renderer.renderNow();
+
+		// Hiding the dock entry instead would stop the footer from rendering at all, which is what
+		// feeds extension statuses into the sidebar; this keeps it rendering with no row.
+		expect(footer.render).toHaveBeenCalled();
+		expect((dock as unknown as { entries: Array<{ minSize?: number }> }).entries[1]?.minSize).toBe(0);
+		renderer.stop();
 	});
 
 	it("animates shrinking dots every 400 ms while retaining the selected phrase", () => {

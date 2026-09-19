@@ -38,7 +38,7 @@ function createRuntime(
 	const requestRender = vi.fn();
 	const exec = vi.fn().mockResolvedValue(execResult);
 	const ctx = {
-		model: { id: "model", provider: "provider", reasoning: true },
+		model: { id: "model", name: "Model Display Name", provider: "provider", reasoning: true },
 		modelRegistry: { isUsingOAuth: vi.fn().mockReturnValue(true) },
 		getContextUsage: vi.fn().mockReturnValue({ tokens: 1_000, contextWindow: 10_000, percent: 10 }),
 		isProjectTrusted: vi.fn().mockReturnValue(true),
@@ -62,6 +62,7 @@ describe("AtelierRuntime", () => {
 		runtime.refreshUsage();
 		expect(runtime.getState()).toMatchObject({
 			modelId: "model",
+			modelName: "Model Display Name",
 			provider: "provider",
 			metrics: { input: 100, output: 20, cacheRead: 900, subscription: true, autoCompact: true },
 		});

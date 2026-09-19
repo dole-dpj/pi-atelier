@@ -376,6 +376,42 @@ describe("Control Center presentation", () => {
 		expect(sidebar.toggle).toHaveBeenCalledOnce();
 	});
 
+	it("prefers model names over ids in Controls and the model selection list", async () => {
+		rootMenuItems.length = 0;
+		const sidebar: SidebarControls = {
+			isVisible: vi.fn(() => true),
+			toggle: vi.fn(),
+			isToolListExpanded: vi.fn(() => false),
+			toggleToolList: vi.fn().mockResolvedValue(undefined),
+		};
+		const context = {
+			...contextWithSelections(["controls", "model", "model", "0", "back", "back", "close"]),
+			model: { id: "old", name: "Old Display Name", provider: "provider" },
+			modelRegistry: {
+				getAvailable: vi.fn().mockReturnValue([
+					{ provider: "test", id: "model-id", name: "Model Name" },
+					{ provider: "test", id: "unnamed-id", name: "" },
+				]),
+			},
+		};
+		await openAtelierControlCenter(
+			{
+				getThinkingLevel: vi.fn().mockReturnValue("medium"),
+				getActiveTools: vi.fn().mockReturnValue([]),
+				setModel: vi.fn().mockResolvedValue(true),
+			} as never,
+			context as never,
+			harness().runtime as never,
+			"/tmp/user.json",
+			sidebar,
+		);
+		const controlsLabels = rootMenuItems[1]?.map((item) => item.label);
+		expect(controlsLabels).toContain("Model / thinking: Old Display Name / medium");
+		const chooseModelLabels = rootMenuItems[3]?.map((item) => item.label);
+		expect(chooseModelLabels).toContain("test/Model Name");
+		expect(chooseModelLabels).toContain("test/unnamed-id");
+	});
+
 	it("frames every content row with heavy vertical borders and corners", () => {
 		const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
 		expect(renderMenuFrame(theme, ["Hi"], 8)).toEqual(["┏━━━━━━┓", "┃Hi    ┃", "┗━━━━━━┛"]);

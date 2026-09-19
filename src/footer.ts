@@ -1,4 +1,4 @@
-import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, truncateToWidth, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { formatTokens } from "./metrics.js";
 import { type AtelierPalette, createPalette, type PaletteRole } from "./palette.js";
 import { responsePerformanceValues } from "./run-activity.js";
@@ -9,6 +9,8 @@ export interface ThemeLike {
 	fg(color: string, text: string): string;
 	bold(text: string): string;
 	italic(text: string): string;
+	/** Background roles such as `scrollbarThumb` are optional so plain test themes stay valid. */
+	bg?(color: string, text: string): string;
 }
 
 const WORKING_DOT_FRAMES = ["...", "..", "."] as const;
@@ -166,7 +168,7 @@ function buildItems(
 		}
 
 		if (segment === "model") {
-			const model = state.modelId ? sanitize(state.modelId) : "";
+			const model = sanitize(state.modelName || state.modelId || "");
 			if (model) {
 				const rendered = palette.paint("primary", model);
 				add({
@@ -392,10 +394,83 @@ export function renderFooterLine(
 	return truncateToWidth(line, width, "");
 }
 
+interface StackEntryLike {
+	component?: unknown;
+	minSize?: unknown;
+}
+
+interface LayoutNodeLike {
+	children?: unknown[];
+	entries?: unknown[];
+}
+
+function footerEntry(root: unknown, footer: Component): StackEntryLike | undefined {
+	const queue: unknown[] = [root];
+	const seen = new Set<unknown>();
+	while (queue.length > 0) {
+		const node = queue.shift();
+		if (typeof node !== "object" || node === null || seen.has(node)) continue;
+		seen.add(node);
+		const entries = (node as LayoutNodeLike).entries;
+		if (!Array.isArray(entries)) continue;
+		for (const candidate of entries) {
+			if (typeof candidate !== "object" || candidate === null) continue;
+			const entry = candidate as StackEntryLike;
+			const component = entry.component as LayoutNodeLike | undefined;
+			if (!component || typeof component !== "object") continue;
+			if (Array.isArray(component.children) && component.children.includes(footer)) return entry;
+			queue.push(component);
+		}
+	}
+	return undefined;
+}
+
+/**
+ * Pi's fullscreen dock reserves a row for the footer (`minSize: 1`), so a footer that renders no
+ * rows would still leave a blank line under the editor. Drops that reservation instead of hiding
+ * the entry: `VStack.render` skips invisible entries, and the footer has to keep rendering because
+ * its factory is the only channel through which extension statuses reach the sidebar.
+ *
+ * A no-op in the regular renderer, where the footer's height is simply its rendered rows.
+ */
+export function reserveFooterRow(tui: TUI, footer: Component): FooterRowReservation {
+	let entry: StackEntryLike | undefined;
+	let previousMinSize: unknown;
+	let released = false;
+	const apply = (): void => {
+		if (released || entry) return;
+		const found = footerEntry((tui as { layoutRoot?: unknown }).layoutRoot, footer);
+		if (!found) return;
+		entry = found;
+		previousMinSize = found.minSize;
+		found.minSize = 0;
+	};
+	apply();
+	// Pi runs the footer factory before mounting the component into its container, so the owning
+	// entry may not be in the tree yet. Mounting happens synchronously right after the factory
+	// returns, and a microtask still lands before the next layout pass.
+	if (!entry) queueMicrotask(apply);
+	return {
+		restore(): void {
+			released = true;
+			if (!entry) return;
+			if (previousMinSize === undefined) delete entry.minSize;
+			else entry.minSize = previousMinSize;
+			entry = undefined;
+		},
+	};
+}
+
+export interface FooterRowReservation {
+	restore(): void;
+}
+
 export interface FooterComponentOptions {
 	getState(): FooterState;
 	getConfig(): AtelierConfig;
 	colorEnabled?: boolean;
+	/** Renders no Status Rail content while keeping the state pipeline (branch, extension statuses) that feeds the sidebar. */
+	hidden?: boolean;
 	requestRender(): void;
 	onBranchChange(callback: () => void): () => void;
 	theme: ThemeLike;
@@ -431,6 +506,11 @@ export function createFooterComponent(options: FooterComponentOptions): Componen
 	return {
 		render(width) {
 			const state = options.getState();
+			if (options.hidden) {
+				syncAnimation(false);
+				// No rows at all: the regular renderer gives the footer exactly its rendered lines.
+				return [];
+			}
 			const config = options.getConfig();
 			const colorEnabled = options.colorEnabled ?? true;
 			const workingDots = WORKING_DOT_FRAMES[frameIndex] ?? WORKING_DOT_FRAMES[0];

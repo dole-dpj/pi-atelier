@@ -76,6 +76,8 @@ export interface SplitPaneController {
 	setSidebarWidth(width: number): void;
 	getSidebarWidth(): number;
 	isEnabled(): boolean;
+	/** True when the Sidebar is placed in the fullscreen split layout, which lays it out as an engine-driven scroll region. */
+	isScrollRegion(): boolean;
 	isVisibleAtWidth(terminalWidth: number): boolean;
 	beginResize(): boolean;
 	finishResize(): void;
@@ -542,6 +544,7 @@ export function createSplitPaneController(options: SplitPaneControllerOptions = 
 		cancelResize: () => stopResize(true),
 		isResizing: () => resizing,
 		isEnabled: () => enabled,
+		isScrollRegion: () => enabled && isPiFullscreenRenderer(),
 		isVisibleAtWidth: visibleAt,
 		overlayOptions: () => overlayLayout,
 		requestRender,

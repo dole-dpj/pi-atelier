@@ -16,7 +16,12 @@ import {
 } from "../src/completion-notifier.js";
 import { loadConfig, saveUserConfigPatch } from "../src/config.js";
 import { AtelierEditor } from "../src/editor.js";
-import { createFooterComponent, type ThemeLike } from "../src/footer.js";
+import {
+	createFooterComponent,
+	type FooterRowReservation,
+	reserveFooterRow,
+	type ThemeLike,
+} from "../src/footer.js";
 import {
 	type DisplaySettingsRuntime,
 	type OverlayLifetime,
@@ -114,6 +119,7 @@ interface ActiveSession {
 	readonly retiredCwd: string;
 	readonly overlayCancellations: Set<() => void>;
 	footerDisposer: (() => void) | undefined;
+	footerRowReservation: FooterRowReservation | undefined;
 	footerGeneration: number;
 	retired: boolean;
 	unsubscribeAskUserBlocked: (() => void) | undefined;
@@ -316,8 +322,16 @@ export default function atelierExtension(
 		// Invalidate callbacks before touching Pi so a failed removal cannot leave a live footer.
 		session.footerGeneration += 1;
 		const footerDisposer = session.footerDisposer;
+		const footerRowReservation = session.footerRowReservation;
 		session.footerDisposer = undefined;
+		session.footerRowReservation = undefined;
 		if (shouldClear) {
+			// Hand the reserved footer row back before Pi mounts the built-in footer.
+			try {
+				footerRowReservation?.restore();
+			} catch {
+				// Row restoration is best-effort and must not mask footer teardown.
+			}
 			try {
 				session.ctx.ui.setFooter(undefined);
 			} catch {
@@ -334,6 +348,32 @@ export default function atelierExtension(
 		} catch {
 			// Footer disposal is best-effort and must not mask session teardown.
 		}
+	}
+
+	/**
+	 * Widget key used by the `@juicesharp/rpiv-todo` overlay above the editor. The Atelier
+	 * sidebar already shows todos, so the overlay is suppressed.
+	 */
+	const TODO_OVERLAY_WIDGET_KEY = "rpiv-todos";
+
+	/**
+	 * Removes the rpiv-todo overlay above the editor. rpiv-todo offers no overlay opt-out,
+	 * and it re-registers its widget only from a fresh update (session lifecycle or todo
+	 * tool activity), so removing the widget right after each trigger keeps it hidden.
+	 * The delayed pass also covers rpiv-todo's first-run module import, which can settle
+	 * after the immediate pass.
+	 */
+	function suppressTodoOverlay(targetSession: ActiveSession): void {
+		const remove = (): void => {
+			if (!enabled || activeSession !== targetSession) return;
+			try {
+				targetSession.ctx.ui.setWidget(TODO_OVERLAY_WIDGET_KEY, undefined);
+			} catch {
+				// Overlay suppression is best-effort and must not disturb the session.
+			}
+		};
+		setTimeout(remove, 0);
+		setTimeout(remove, 2_000);
 	}
 
 	/**
@@ -556,6 +596,8 @@ export default function atelierExtension(
 				},
 				getConfig: () => getCurrentSession()?.runtime.getConfig() ?? retiredConfig,
 				colorEnabled: !("NO_COLOR" in process.env),
+				// The Status Rail stays hidden; the footer only keeps driving sidebar state (branch, extension statuses).
+				hidden: true,
 				requestRender: footerRequestRender,
 				onBranchChange: (callback) =>
 					footerData.onBranchChange(() => {
@@ -567,8 +609,15 @@ export default function atelierExtension(
 				theme: theme as unknown as ThemeLike,
 			});
 			const mounted = getCurrentSession();
-			if (mounted) mounted.footerDisposer = component.dispose;
-			else component.dispose();
+			// The hidden Status Rail must not reserve a blank row under the editor.
+			const reservation = reserveFooterRow(tui, component);
+			if (mounted) {
+				mounted.footerDisposer = component.dispose;
+				mounted.footerRowReservation = reservation;
+			} else {
+				reservation.restore();
+				component.dispose();
+			}
 			return component;
 		});
 		try {
@@ -646,6 +695,7 @@ export default function atelierExtension(
 				}
 				enabled = true;
 				installFooter(current);
+				suppressTodoOverlay(current);
 				ctx.ui.notify("Pi Atelier enabled", "info");
 				return;
 			}
@@ -769,6 +819,7 @@ export default function atelierExtension(
 				retiredCwd: initializationContext.cwd,
 				overlayCancellations: new Set(),
 				footerDisposer: undefined,
+				footerRowReservation: undefined,
 				footerGeneration: 0,
 				retired: false,
 				unsubscribeAskUserBlocked: undefined,
@@ -840,6 +891,7 @@ export default function atelierExtension(
 			}
 			if (enabled && isFresh() && activeSession === nextSession) {
 				installFooter(nextSession);
+				suppressTodoOverlay(nextSession);
 				if (loaded.config.showSidebarOnStartup) nextSession.sidebar.show();
 			}
 			void candidateRuntime.flushWorkspacePulseRefresh();
@@ -889,6 +941,7 @@ export default function atelierExtension(
 		if (!current) return;
 		current.todos = reconstructTodos(ctx);
 		requestAllRenders(current);
+		suppressTodoOverlay(current);
 	});
 
 	pi.on("agent_start", (_event, ctx) => {
@@ -925,6 +978,7 @@ export default function atelierExtension(
 		if (!current) return;
 		current.runActivity.finishTool(event);
 		current.runtime.scheduleWorkspacePulseRefresh();
+		if (event.toolName === "todo") suppressTodoOverlay(current);
 	});
 	// Collapse todo tool output when sidebar shows todos
 	pi.on("tool_result", (event, ctx) => {
@@ -972,7 +1026,12 @@ export default function atelierExtension(
 	});
 	pi.on("model_select", (_event, ctx) => getActiveSession(ctx)?.runtime.refreshUsage());
 	pi.on("thinking_level_select", (_event, ctx) => getActiveSession(ctx)?.runtime.refreshUsage());
-	pi.on("session_compact", (_event, ctx) => getActiveSession(ctx)?.runtime.refreshUsage());
+	pi.on("session_compact", (_event, ctx) => {
+		const current = getActiveSession(ctx);
+		if (!current) return;
+		current.runtime.refreshUsage();
+		suppressTodoOverlay(current);
+	});
 	pi.on("session_info_changed", (_event, ctx) => getActiveSession(ctx)?.runtime.refreshUsage());
 	pi.on("session_shutdown", (_event, ctx) => {
 		const current = getActiveSession(ctx);

@@ -1,7 +1,13 @@
 import { homedir } from "node:os";
 import { basename } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type Component, type OverlayHandle, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import {
+	type Component,
+	type OverlayHandle,
+	ScrollView,
+	truncateToWidth,
+	visibleWidth,
+} from "@earendil-works/pi-tui";
 import type { ThemeLike } from "./footer.js";
 import { aggregateMetrics, formatTokens } from "./metrics.js";
 import { type AtelierPalette, createPalette, type PaletteRole } from "./palette.js";
@@ -252,7 +258,7 @@ function agentRows(
 			`${activitySymbol(snapshot.activity)} ${activityText || "—"}`,
 		),
 	);
-	const model = valueRow(snapshot.modelId, palette, "primary");
+	const model = valueRow(snapshot.modelName || snapshot.modelId, palette, "primary");
 	const provider = snapshot.provider ? palette.paint("muted", display(snapshot.provider).toUpperCase()) : "";
 	const thinking = snapshot.thinkingLevel
 		? palette.paint("primary", display(snapshot.thinkingLevel).toUpperCase())
@@ -589,28 +595,30 @@ function todosRows(snapshot: SidebarSnapshot, palette: AtelierPalette): string[]
 
 const exceptionStatusPattern =
 	/\b(error|failed?|failure|warn(?:ing)?|offline|unavailable|blocked|degraded)\b/i;
+const fatalStatusPattern = /\b(error|failed?|failure|offline|unavailable)\b/i;
 
-function statusDetailPanelRole(snapshot: SidebarSnapshot): PaletteRole {
-	return snapshot.extensionStatuses.some((status) =>
-		/\b(error|failed?|failure|offline|unavailable)\b/i.test(sanitize(status)),
-	)
-		? "error"
-		: "warning";
+function statusRowPaletteRole(status: string): PaletteRole {
+	return fatalStatusPattern.test(status) ? "error" : "warning";
 }
 
-function statusDetailRows(snapshot: SidebarSnapshot, palette: AtelierPalette): string[] {
-	const statuses = snapshot.extensionStatuses
+function exceptionStatusRow(status: string, palette: AtelierPalette): string {
+	const role = statusRowPaletteRole(status);
+	return palette.paint(role, `${role === "error" ? "✕" : "▲"} ${status}`);
+}
+
+/**
+ * Every status an extension registered (hindsight, permissions, and so on), with the problem ones
+ * marked and the healthy ones dimmed: this is the only status view once the Status Rail is hidden.
+ */
+function extensionStatusRows(snapshot: SidebarSnapshot, palette: AtelierPalette): string[] {
+	return snapshot.extensionStatuses
 		.map(sanitize)
-		.filter((status) => status && exceptionStatusPattern.test(status));
-	if (statuses.length === 0) return [];
-	return [
-		...statuses.map((status) => {
-			const role: PaletteRole = /\b(error|failed?|failure|offline|unavailable)\b/i.test(status)
-				? "error"
-				: "warning";
-			return palette.paint(role, `${role === "error" ? "✕" : "▲"} ${status}`);
-		}),
-	];
+		.filter(Boolean)
+		.map((status) =>
+			exceptionStatusPattern.test(status)
+				? exceptionStatusRow(status, palette)
+				: palette.paint("muted", `· ${status}`),
+		);
 }
 
 interface ActivityGroups {
@@ -837,6 +845,20 @@ function activitySidebarGroups(
 	].filter((group) => group.rows.length > 0);
 }
 
+const nonEmptyGroups = (groups: SidebarGroup[]): SidebarGroup[] =>
+	groups.filter((group) => group.rows.length > 0);
+
+/** Panels are separated by a blank row; the region's own tail must not keep one. */
+function trimTrailingBlankRows(rows: string[]): string[] {
+	let end = rows.length;
+	while (end > 0 && visibleWidth(rows[end - 1] ?? "") === 0) end -= 1;
+	return rows.slice(0, end);
+}
+
+/**
+ * Drops whole groups by `dropRank` until the dock fits its height budget. Scroll regions
+ * skip this and render every group, so the viewport scrolls instead of hiding panels.
+ */
 function composeGroups(
 	groups: SidebarGroup[],
 	height: number,
@@ -844,7 +866,7 @@ function composeGroups(
 	palette: AtelierPalette,
 	theme: ThemeLike,
 ): SidebarGroup[] {
-	let candidate = groups.filter((group) => group.rows.length > 0);
+	let candidate = nonEmptyGroups(groups);
 	while (renderGroups(candidate, width, palette, theme).length > height) {
 		let dropIndex = -1;
 		let dropRank = Number.POSITIVE_INFINITY;
@@ -871,12 +893,18 @@ export function renderSidebarLines(
 	colorEnabled = true,
 	now = Date.now(),
 	resizing = false,
+	scrollable = false,
 ): string[] {
 	const palette = createPalette(theme, colorEnabled);
 	const safeWidth = Math.max(0, Math.trunc(width));
 	const safeHeight = Math.max(0, Math.trunc(height));
 	if (safeWidth <= 0 || safeHeight <= 0) return [];
-	const contentWidth = Math.max(0, safeWidth - 2);
+	// A scroll region keeps its rightmost column clear for the scrollbar, but that column still has
+	// to be part of the dock's own rows: Pi paints exactly what the component returns, so a column
+	// reserved elsewhere (for example through the scroll view's content width) stays unpainted and
+	// shows the region next to it through the gap, background and all.
+	const dockWidth = scrollable ? Math.max(0, safeWidth - 1) : safeWidth;
+	const contentWidth = Math.max(0, dockWidth - 2);
 	const panelContentWidth = Math.max(0, contentWidth - 4);
 	const layout = sidebarLayout(safeWidth, config);
 	const toolNameRows = layout.showToolNames ? activeToolNameRows(snapshot, panelContentWidth, palette) : [];
@@ -915,13 +943,15 @@ export function renderSidebarLines(
 			dropRank: group.name === "activityCore" ? Number.POSITIVE_INFINITY : group.dropRank + 40,
 		})),
 		{
-			name: "statusDetails",
-			panel: "ALERTS",
-			panelId: "alerts",
-			panelRole: statusDetailPanelRole(snapshot),
-			rows: statusDetailRows(snapshot, palette),
+			name: "statuses",
+			panel: "STATUSES",
+			panelId: "statuses",
+			panelRole: "accent",
+			rows: extensionStatusRows(snapshot, palette),
 			required: false,
-			dropRank: 80,
+			// Ambient information: a tight budget drops STATUSES before the established panels, so it
+			// never displaces them. A fullscreen scroll region renders every panel regardless.
+			dropRank: 3,
 		},
 		{
 			name: "todos",
@@ -1064,18 +1094,24 @@ export function renderSidebarLines(
 			dropRank: Number.POSITIVE_INFINITY,
 		});
 	}
-	return renderDock(
-		renderGroups(
-			composeGroups(ordered, safeHeight, contentWidth, palette, theme),
-			contentWidth,
-			palette,
-			theme,
-		),
-		safeWidth,
-		safeHeight,
+	const visibleGroups = scrollable
+		? nonEmptyGroups(ordered)
+		: composeGroups(ordered, safeHeight, contentWidth, palette, theme);
+	const rendered = renderGroups(visibleGroups, contentWidth, palette, theme);
+	// A scroll region owns clipping: content taller than the viewport stays whole, while shorter
+	// content still fills the viewport so no stale rows survive a redraw. The tail is trimmed so
+	// scrolling to the end lines the last panel up with the editor instead of a blank row.
+	const rows = scrollable ? trimTrailingBlankRows(rendered) : rendered;
+	const lines = renderDock(
+		rows,
+		dockWidth,
+		scrollable ? Math.max(rows.length, safeHeight) : safeHeight,
 		palette,
 		resizing,
 	);
+	// The cleared column carries the default background explicitly, so it can never inherit the
+	// neighbouring region's background through the terminal's erase/leftover state.
+	return scrollable ? lines.map((line) => `${line}\u001b[49m `) : lines;
 }
 
 export interface SidebarComponentOptions {
@@ -1083,6 +1119,8 @@ export interface SidebarComponentOptions {
 	getConfig(): AtelierConfig;
 	getHeight(): number;
 	isResizing?(): boolean;
+	/** Renders every panel unbounded for a scroll region instead of dropping panels to fit. */
+	scrollable?: boolean;
 	theme: ThemeLike;
 	colorEnabled?: boolean;
 }
@@ -1121,6 +1159,7 @@ export function createSidebarComponent(options: SidebarComponentOptions): Compon
 					options.colorEnabled ?? true,
 					Date.now(),
 					resizing,
+					options.scrollable === true,
 				);
 			} catch (error) {
 				return renderSidebarError(error, width, height, resizing);
@@ -1128,6 +1167,32 @@ export function createSidebarComponent(options: SidebarComponentOptions): Compon
 		},
 		invalidate() {},
 	};
+}
+
+/**
+ * Pi's wheel routing falls back to the primary (transcript) scroll view whenever the region under
+ * the pointer cannot absorb the whole delta, so a wheel over the Sidebar at its first or last row
+ * would scroll the transcript. The Sidebar owns its own column instead: it always reports the
+ * delta as consumed, keeping the wheel with the region under the pointer.
+ */
+class SidebarScrollView extends ScrollView {
+	override scrollBy(lines: number): number {
+		super.scrollBy(lines);
+		return 0;
+	}
+}
+
+/**
+ * Wraps the Sidebar in a scroll region. In the fullscreen split layout Pi lays this node out
+ * with the engine's scroll support, so wheel/trackpad scrolls the Sidebar (with a transient
+ * scrollbar) instead of the dock dropping panels it cannot fit.
+ */
+function createSidebarScrollView(component: Component, theme: ThemeLike): ScrollView {
+	return new SidebarScrollView(component, {
+		scrollbar: "auto",
+		overscroll: "contain",
+		scrollbarStyle: (text) => theme.bg?.("scrollbarThumb", text) ?? text,
+	});
 }
 
 export interface SidebarController {
@@ -1347,14 +1412,18 @@ export function createSidebarController(options: SidebarControllerOptions): Side
 							close();
 						}
 					}
-					return createSidebarComponent({
+					const sidebarTheme = theme as unknown as ThemeLike;
+					const scrollable = split.isScrollRegion();
+					const component = createSidebarComponent({
 						getSnapshot: binding.getSnapshot,
 						getConfig: binding.getConfig,
 						getHeight: () => tui.terminal.rows,
 						isResizing: binding.isResizing,
-						theme: theme as unknown as ThemeLike,
+						scrollable,
+						theme: sidebarTheme,
 						...(options.colorEnabled === undefined ? {} : { colorEnabled: options.colorEnabled }),
 					});
+					return scrollable ? createSidebarScrollView(component, sidebarTheme) : component;
 				},
 				{
 					overlay: true,

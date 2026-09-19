@@ -17,7 +17,7 @@ export type Density = "comfortable" | "compact";
 export type BuiltinSidebarPanelId =
 	| "agent"
 	| "activity"
-	| "alerts"
+	| "statuses"
 	| "todos"
 	| "context"
 	| "workspace"
@@ -138,6 +138,7 @@ export interface AtelierState {
 	activity: ActivityState;
 	workingLabel?: string;
 	modelId?: string;
+	modelName?: string;
 	provider?: string;
 	thinkingLevel?: string;
 	branch?: string;
@@ -178,7 +179,7 @@ export const DEFAULT_CONFIG: AtelierConfig = {
 	sidebarPanelLayout: [
 		{ id: "agent", visible: true },
 		{ id: "activity", visible: true },
-		{ id: "alerts", visible: true },
+		{ id: "statuses", visible: true },
 		{ id: "todos", visible: true },
 		{ id: "context", visible: true },
 		{ id: "workspace", visible: true },

@@ -240,10 +240,15 @@ export class AtelierRuntime {
 		const model = this.#ctx.model;
 		const context = this.#ctx.getContextUsage();
 		const subscription = model ? this.#ctx.modelRegistry.isUsingOAuth(model) : false;
-		const { modelId: _modelId, provider: _provider, ...stateWithoutModel } = this.#state;
+		const {
+			modelId: _modelId,
+			modelName: _modelName,
+			provider: _provider,
+			...stateWithoutModel
+		} = this.#state;
 		this.#state = {
 			...stateWithoutModel,
-			...(model ? { modelId: model.id, provider: model.provider } : {}),
+			...(model ? { modelId: model.id, provider: model.provider, modelName: model.name } : {}),
 			thinkingLevel: this.#pi.getThinkingLevel?.(),
 			metrics: aggregateMetrics(messages, {
 				subscription,

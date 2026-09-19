@@ -674,7 +674,7 @@ export async function openAtelierControlCenter(
 						},
 						{
 							value: "model",
-							label: `Model / thinking: ${ctx.model?.id ?? "none"} / ${pi.getThinkingLevel()}`,
+							label: `Model / thinking: ${(ctx.model?.name || ctx.model?.id) ?? "none"} / ${pi.getThinkingLevel()}`,
 							description: "Session control",
 						},
 						{
@@ -709,7 +709,7 @@ export async function openAtelierControlCenter(
 							"Choose model",
 							models.map((model, index) => ({
 								value: String(index),
-								label: `${model.provider}/${model.id}`,
+								label: `${model.provider}/${model.name || model.id}`,
 							})),
 							lifetime,
 						);
