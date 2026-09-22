@@ -7,7 +7,7 @@ import {
 	getAgentDir,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import type { KeyId } from "@earendil-works/pi-tui";
+import { isViewportTUI, type KeyId } from "@earendil-works/pi-tui";
 import {
 	type CompletionNotification,
 	type CompletionNotifier,
@@ -635,6 +635,8 @@ export default function atelierExtension(
 			// The hidden Status Rail must not reserve a blank row under the editor.
 			const reservation = reserveFooterRow(tui, component);
 			if (mounted) {
+				// Question docking also works when the sidebar is disabled on startup.
+				if (isViewportTUI(tui)) mounted.sidebar.attach(tui);
 				mounted.footerDisposer = component.dispose;
 				mounted.footerRowReservation = reservation;
 			} else {
@@ -821,6 +823,8 @@ export default function atelierExtension(
 					activeSession?.token === initializationToken ? candidateRuntime.getConfig() : loaded.config,
 				colorEnabled: !("NO_COLOR" in process.env),
 				shouldAnimate: () => activeSession?.token === initializationToken && localRunActivity.isRunning(),
+				isInputRequested: () =>
+					enabled && activeSession?.token === initializationToken && activeSession.askUserBlocked,
 				onWarning: (message) => initializationContext.ui.notify(message, "warning"),
 				onError: (error) =>
 					initializationContext.ui.notify(

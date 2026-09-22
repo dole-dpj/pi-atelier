@@ -1,10 +1,13 @@
 import type { Component, OverlayHandle, OverlayOptions, TUI } from "@earendil-works/pi-tui";
-import { HStack, isViewportTUI, matchesKey } from "@earendil-works/pi-tui";
+import { HStack, isViewportTUI, matchesKey, VStack } from "@earendil-works/pi-tui";
 import { createImageCompositorBinding } from "./image-compositor.js";
+import { parseSgrMouseEvent } from "./mouse.js";
+import { createQuestionDock } from "./question-dock.js";
+
+export { parseSgrMouseEvent, type SgrMouseEvent } from "./mouse.js";
 
 const ENABLE_MOUSE = "\u001b[?1002h\u001b[?1006h";
 const DISABLE_MOUSE = "\u001b[?1006l\u001b[?1002l";
-const SGR_MOUSE = /^\u001b\[<(\d+);(\d+);(\d+)([Mm])$/;
 const PI_084_REGULAR_RENDER_ADAPTER = Symbol("pi-atelier.regular-render-adapter");
 const PI_084_FULLSCREEN_LAYOUT_ADAPTER = Symbol("pi-atelier.fullscreen-layout-adapter");
 const PI_084_FULLSCREEN_OVERLAY_ADAPTER = Symbol("pi-atelier.fullscreen-overlay-adapter");
@@ -33,26 +36,9 @@ type AdaptedTui = TUI & {
 	[PI_084_FULLSCREEN_LAYOUT_ADAPTER]: FullscreenLayoutAdapterState | undefined;
 	[PI_084_FULLSCREEN_OVERLAY_ADAPTER]: FullscreenOverlayAdapterState | undefined;
 	layoutRoot?: Component;
+	overlayStack?: { component: Component }[];
 	setLayoutRoot(component: Component | undefined): void;
 };
-
-export interface SgrMouseEvent {
-	button: number;
-	x: number;
-	y: number;
-	release: boolean;
-	motion: boolean;
-}
-
-export function parseSgrMouseEvent(data: string): SgrMouseEvent | undefined {
-	const match = data.match(SGR_MOUSE);
-	if (!match) return undefined;
-	const button = Number(match[1]);
-	const x = Number(match[2]);
-	const y = Number(match[3]);
-	if (![button, x, y].every(Number.isFinite) || x < 1 || y < 1) return undefined;
-	return { button, x, y, release: match[4] === "m", motion: (button & 32) !== 0 };
-}
 
 export const DEFAULT_SIDEBAR_WIDTH = 44;
 export const MIN_SIDEBAR_WIDTH = 28;
@@ -64,6 +50,7 @@ export interface SplitPaneControllerOptions {
 	minSidebarWidth?: number;
 	maxSidebarWidth?: number;
 	minMainWidth?: number;
+	isInputRequested?(): boolean;
 	onError?(error: unknown): void;
 	subscribeInput?(handler: (data: string) => { consume?: boolean; data?: string } | undefined): () => void;
 	onResizeChange?(resizing: boolean): void;
@@ -125,6 +112,11 @@ export function createSplitPaneController(options: SplitPaneControllerOptions = 
 	let resizeMouseTerminal: TUI["terminal"] | undefined;
 	let fullscreenSidebarComponent: Component | undefined;
 	let fullscreenSidebarHidden = false;
+	let questionDock: ReturnType<typeof createQuestionDock> | undefined;
+	const questionSpace: Component = {
+		render: (width) => questionDock?.space.render(width) ?? [],
+		invalidate() {},
+	};
 	let imageCompositor: ReturnType<typeof createImageCompositorBinding> | undefined;
 	let controller: SplitPaneController;
 	const adapterOwner = {};
@@ -188,6 +180,12 @@ export function createSplitPaneController(options: SplitPaneControllerOptions = 
 	};
 
 	const createFullscreenSplitRoot = (originalRoot: Component): Component =>
+		new VStack([
+			{ component: createFullscreenColumns(originalRoot), basis: 0, grow: 1, shrink: 1, minSize: 1 },
+			{ component: questionSpace, grow: 0, shrink: 0 },
+		]);
+
+	const createFullscreenColumns = (originalRoot: Component): Component =>
 		new HStack([
 			{ component: originalRoot, basis: 0, grow: 1, shrink: 1, minSize: minimumMain },
 			{
@@ -305,14 +303,51 @@ export function createSplitPaneController(options: SplitPaneControllerOptions = 
 					isFocused: () => handle.isFocused(),
 				};
 			}
+			if (
+				!questionDock &&
+				options.isInputRequested?.() &&
+				overlayOptions?.anchor === "bottom-center" &&
+				overlayOptions.width === "100%" &&
+				!overlayOptions.nonCapturing &&
+				!overlayOptions.visible
+			) {
+				syncFullscreenLayoutAdapter();
+				const dock = createQuestionDock(tui!, component, () => {
+					const width = tui?.terminal.columns ?? 0;
+					return width - effectiveSidebarWidth(width);
+				});
+				questionDock = dock;
+				try {
+					const handle = Reflect.apply(base, tui, [dock.component, overlayOptions]) as OverlayHandle;
+					dock.setHandle(handle);
+					return {
+						...handle,
+						hide() {
+							handle.hide();
+							dock.dispose();
+							if (questionDock === dock) questionDock = undefined;
+						},
+					};
+				} catch (error) {
+					dock.dispose();
+					questionDock = undefined;
+					throw error;
+				}
+			}
 			return Reflect.apply(base, tui, [component, overlayOptions]);
 		};
 		adaptedTui.hideOverlay = () => {
 			const state = adaptedTui[PI_084_FULLSCREEN_OVERLAY_ADAPTER];
 			const base = state?.owner === adapterOwner ? state.baseHideOverlay : baseHideOverlay;
 			const hadVisibleOverlay = tui?.hasOverlay() ?? false;
+			const closingQuestion =
+				questionDock && adaptedTui.overlayStack?.at(-1)?.component === questionDock.component;
 			Reflect.apply(base, tui, []);
-			if (!hadVisibleOverlay && fullscreenSidebarComponent) {
+			if (closingQuestion) {
+				questionDock?.dispose();
+				questionDock = undefined;
+			}
+			if (!closingQuestion && !hadVisibleOverlay && fullscreenSidebarComponent) {
 				enabled = false;
 				fullscreenSidebarComponent = undefined;
 				fullscreenSidebarHidden = false;
@@ -568,6 +603,8 @@ export function createSplitPaneController(options: SplitPaneControllerOptions = 
 			if (disposed) return;
 			stopResize(true);
 			disposed = true;
+			questionDock?.dispose();
+			questionDock = undefined;
 			enabled = false;
 			fullscreenSidebarComponent = undefined;
 			fullscreenSidebarHidden = false;

@@ -62,6 +62,8 @@ The sidebar starts visible and hides when the terminal is too narrow. Press `Ctr
 
 In Pi fullscreen TUI mode, the sidebar is rendered as a separate split-layout child so transcript selection and copy stay scoped to Pi output. Regular TUI mode remains terminal-native, so a rectangular terminal selection can still include sidebar text.
 
+When `@juicesharp/rpiv-ask-user-question` requests input in fullscreen mode, Atelier reserves a separate bottom region for the questionnaire instead of covering the conversation. Questions use at most half the terminal height, leaving the main pane available for review. Scroll over the main pane with the mouse wheel, or use Pi's configured transcript **PageUp / PageDown** shortcuts, while the question keeps keyboard focus. Arrow keys, typing, Enter, and Esc keep their questionnaire behavior. Collapsing or closing the questionnaire releases its space; the tool's default **Ctrl+]** collapse shortcut still works. This also works with the sidebar hidden. Regular mode keeps the tool's native overlay behavior.
+
 Inline images remain visible beside the sidebar. While settings or another capturing overlay is open, visible transcript images temporarily hide to keep the panel readable; closing the panel restores them without changing image data or layout space.
 
 The TODO panel supports Pi `todo` results and the optional `@juicesharp/rpiv-todo` extension.

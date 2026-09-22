@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Dock `rpiv-ask-user-question` questionnaires below the conversation in fullscreen mode, reserving at most half the terminal height and allowing transcript mouse-wheel and PageUp/PageDown scrolling without taking focus from the answer. Preserve collapse, close, nested-overlay, and sidebar-hidden behavior.
+
 - Fix a fullscreen Sidebar crash when its scrollbar becomes visible by applying `scrollbarThumb` as a foreground color, not a background color. Add real dark/light theme coverage for normal and active scrollbar painting.
 
 - Support fullscreen composer click-to-position with frame, padding, wrapped-line, and autocomplete coordinate mapping; retain Pi's drag selection and wheel behavior.

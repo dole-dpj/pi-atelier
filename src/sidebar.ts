@@ -6,6 +6,7 @@ import {
 	type OverlayHandle,
 	ScrollView,
 	truncateToWidth,
+	type TUI,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { ThemeLike } from "./footer.js";
@@ -1196,6 +1197,7 @@ function createSidebarScrollView(component: Component, theme: ThemeLike): Scroll
 }
 
 export interface SidebarController {
+	attach(tui: TUI): void;
 	show(): void;
 	hide(): void;
 	toggle(): void;
@@ -1213,6 +1215,7 @@ export interface SidebarControllerOptions {
 	getConfig(): AtelierConfig;
 	colorEnabled?: boolean;
 	shouldAnimate?(): boolean;
+	isInputRequested?(): boolean;
 	animationIntervalMs?: number;
 	onWarning?(message: string): void;
 	onError?(error: unknown): void;
@@ -1320,6 +1323,7 @@ export function createSidebarController(options: SidebarControllerOptions): Side
 	};
 
 	const split: SplitPaneController = createSplitPaneController({
+		isInputRequested: () => options.isInputRequested?.() ?? false,
 		subscribeInput: (handler) => options.ctx.ui.onTerminalInput(handler),
 		onResizeChange: () => {
 			safely(() => requestOverlayRender?.());
@@ -1461,6 +1465,7 @@ export function createSidebarController(options: SidebarControllerOptions): Side
 	};
 
 	return {
+		attach: split.attach,
 		show,
 		hide,
 		toggle() {
