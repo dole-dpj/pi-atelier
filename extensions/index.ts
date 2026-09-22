@@ -22,6 +22,7 @@ import {
 	reserveFooterRow,
 	type ThemeLike,
 } from "../src/footer.js";
+import { createImageCompositorBinding } from "../src/image-compositor.js";
 import {
 	type DisplaySettingsRuntime,
 	type OverlayLifetime,
@@ -608,6 +609,20 @@ export default function atelierExtension(
 					}),
 				theme: theme as unknown as ThemeLike,
 			});
+			const imageCompositor = createImageCompositorBinding(tui);
+			const renderFooter = component.render;
+			component.render = (width) => {
+				imageCompositor.sync();
+				return renderFooter(width);
+			};
+			const disposeFooter = component.dispose;
+			component.dispose = () => {
+				try {
+					disposeFooter();
+				} finally {
+					imageCompositor.dispose();
+				}
+			};
 			const mounted = getCurrentSession();
 			// The hidden Status Rail must not reserve a blank row under the editor.
 			const reservation = reserveFooterRow(tui, component);

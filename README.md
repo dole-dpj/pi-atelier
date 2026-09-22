@@ -2,7 +2,7 @@
 
 A responsive status rail and activity sidebar for [Pi](https://pi.dev).
 
-[![Pi Atelier demo](https://raw.githubusercontent.com/michaelmjhhhh/pi-atelier/main/docs/demo.png?v=0.10.0)](https://github.com/michaelmjhhhh/pi-atelier/releases/download/v0.10.0/demo.mp4)
+[![Pi Atelier demo](https://raw.githubusercontent.com/michaelmjhhhh/pi-atelier/main/assets/demo.png?v=0.10.0)](https://github.com/michaelmjhhhh/pi-atelier/releases/download/v0.10.0/demo.mp4)
 
 [Watch the demo](https://github.com/michaelmjhhhh/pi-atelier/releases/download/v0.10.0/demo.mp4)
 
@@ -61,6 +61,8 @@ Commands:
 The sidebar starts visible and hides when the terminal is too narrow. Press `Ctrl+Shift+R` to resize it.
 
 In Pi fullscreen TUI mode, the sidebar is rendered as a separate split-layout child so transcript selection and copy stay scoped to Pi output. Regular TUI mode remains terminal-native, so a rectangular terminal selection can still include sidebar text.
+
+Inline images remain visible beside the sidebar. While settings or another capturing overlay is open, visible transcript images temporarily hide to keep the panel readable; closing the panel restores them without changing image data or layout space.
 
 The TODO panel supports Pi `todo` results and the optional `@juicesharp/rpiv-todo` extension.
 
