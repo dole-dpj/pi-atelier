@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix a fullscreen Sidebar crash when its scrollbar becomes visible by applying `scrollbarThumb` as a foreground color, not a background color. Add real dark/light theme coverage for normal and active scrollbar painting.
+
 - Support fullscreen composer click-to-position with frame, padding, wrapped-line, and autocomplete coordinate mapping; retain Pi's drag selection and wheel behavior.
 - Use a native BlinkingBar cursor while the composer is focused, remove the software block, and restore terminal cursor settings on blur and teardown. Smooth blink animation depends on the terminal.
 - Raise the minimum supported Pi version and development dependencies to 0.87.0 for the native editor mouse API.

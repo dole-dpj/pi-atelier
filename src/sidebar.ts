@@ -1191,7 +1191,7 @@ function createSidebarScrollView(component: Component, theme: ThemeLike): Scroll
 	return new SidebarScrollView(component, {
 		scrollbar: "auto",
 		overscroll: "contain",
-		scrollbarThumbStyle: (text) => theme.bg?.("scrollbarThumb", text) ?? text,
+		scrollbarThumbStyle: (text) => theme.fg("scrollbarThumb", text),
 	});
 }
 

@@ -1,5 +1,7 @@
 import { type Component, ScrollView, TuiAltScreen, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
+// Pi's built-in theme loader is not re-exported from the package entrypoint.
+import { getThemeByName } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import { EMPTY_RUN_ACTIVITY, type RunActivitySnapshot } from "../src/run-activity.js";
 import {
 	buildSidebarSnapshot,
@@ -2210,6 +2212,57 @@ describe("sidebar component and overlay", () => {
 		renderer.stop();
 		controller.hide();
 		controller.dispose();
+	});
+
+	it.each(["dark", "light"])("paints the Sidebar scrollbar with the real %s theme", (name) => {
+		vi.useFakeTimers();
+		const realTheme = getThemeByName(name);
+		expect(realTheme).toBeDefined();
+		const fg = vi.spyOn(realTheme!, "fg"); // Call through: invalid theme roles must throw.
+		const terminal = {
+			columns: 120,
+			rows: 20,
+			write: vi.fn(),
+			start: vi.fn(),
+			stop: vi.fn(),
+			hideCursor: vi.fn(),
+			showCursor: vi.fn(),
+		};
+		const renderer = new TuiAltScreen(terminal as never);
+		renderer.requestRender = vi.fn();
+		renderer.setLayoutRoot({ render: () => ["transcript"], invalidate() {} });
+		let component: Component | undefined;
+		const custom = vi.fn((factory: (...args: any[]) => Component, customOptions: any) => {
+			component = factory(renderer, realTheme, {}, vi.fn());
+			renderer.showOverlay(component, customOptions.overlayOptions());
+			return new Promise<undefined>(() => undefined);
+		});
+		const controller = createSidebarController({
+			ctx: { mode: "tui", ui: { custom } } as never,
+			getSnapshot: snapshot,
+			getConfig: () => DEFAULT_CONFIG,
+		});
+		renderer.start();
+		try {
+			controller.show();
+			renderer.renderNow();
+			expect(component).toBeInstanceOf(ScrollView);
+			const sidebar = component as ScrollView;
+			sidebar.scrollBy(1);
+			expect(sidebar.scrollTop).toBe(1);
+			expect(sidebar.isScrollbarVisible).toBe(true);
+			// A plain component.render() does not paint the scrollbar. Exercise the
+			// layout renderer that crashed when the thumb became visible at runtime.
+			expect(() => renderer.renderNow()).not.toThrow();
+			expect(fg).toHaveBeenCalledWith("scrollbarThumb", "┃");
+			sidebar.setScrollbarActive(true);
+			expect(() => renderer.renderNow()).not.toThrow();
+			expect(fg).toHaveBeenCalledWith("scrollbarThumb", "█");
+		} finally {
+			controller.dispose();
+			renderer.stop();
+			fg.mockRestore();
+		}
 	});
 
 	it("reads live terminal height on every render without recreation", () => {

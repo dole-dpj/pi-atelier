@@ -9,8 +9,6 @@ export interface ThemeLike {
 	fg(color: string, text: string): string;
 	bold(text: string): string;
 	italic(text: string): string;
-	/** Background roles such as `scrollbarThumb` are optional so plain test themes stay valid. */
-	bg?(color: string, text: string): string;
 }
 
 const WORKING_DOT_FRAMES = ["...", "..", "."] as const;
