@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Support fullscreen composer click-to-position with frame, padding, wrapped-line, and autocomplete coordinate mapping; retain Pi's drag selection and wheel behavior.
+- Use a native BlinkingBar cursor while the composer is focused, remove the software block, and restore terminal cursor settings on blur and teardown. Smooth blink animation depends on the terminal.
+- Raise the minimum supported Pi version and development dependencies to 0.87.0 for the native editor mouse API.
+
 ## 0.10.2 — 2026-09-21
 
 - Preserve Sidebar text and borders beside inline images in regular and fullscreen mode ([#53](https://github.com/michaelmjhhhh/pi-atelier/issues/53)).

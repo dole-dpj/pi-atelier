@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { Container, VStack } from "@earendil-works/pi-tui";
+import { Container, TuiMainScreen, VStack } from "@earendil-works/pi-tui";
 import atelierExtension, {
 	SIDEBAR_PANEL_EVENT_CHANNEL,
 	type AtelierExtensionDependencies,
@@ -364,6 +364,36 @@ describe("extension registration", () => {
 		expect(h.shortcuts).toContain("alt+a");
 		expect(h.shortcuts).toContain("ctrl+shift+r");
 	});
+
+	it.each(["disable", "shutdown", "failed editor removal"] as const)(
+		"restores the composer cursor on %s and retires stale factories",
+		async (action) => {
+			const h = harness();
+			await start(h);
+			const factory = h.setEditorComponent.mock.calls[0]?.[0];
+			const terminal = { rows: 24, columns: 80, write: vi.fn(), hideCursor: vi.fn() };
+			const tui = new TuiMainScreen(terminal as never);
+			tui.requestRender = vi.fn();
+			const theme = { borderColor: (text: string) => text, selectList: {} };
+			const keys = { matches: () => false };
+			const editor = factory(tui, theme, keys);
+			tui.setFocus(editor);
+			expect(tui.getShowHardwareCursor()).toBe(true);
+			if (action === "failed editor removal") {
+				h.setEditorComponent.mockImplementation(() => {
+					throw new Error("editor removal failed");
+				});
+			}
+			if (action === "shutdown") await h.handlers.get("session_shutdown")?.({}, h.ctx);
+			else await command(h, "disable");
+			expect(tui.getShowHardwareCursor()).toBe(false);
+			expect(terminal.write).toHaveBeenLastCalledWith("\u001b[0 q");
+			terminal.write.mockClear();
+			tui.setFocus(factory(tui, theme, keys));
+			expect(tui.getShowHardwareCursor()).toBe(false);
+			expect(terminal.write).not.toHaveBeenCalled();
+		},
+	);
 
 	it("routes alt+a to the Control Center", async () => {
 		const h = harness("tui", "linux", true);

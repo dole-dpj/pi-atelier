@@ -298,6 +298,7 @@ export function createSplitPaneController(options: SplitPaneControllerOptions = 
 							tui?.requestRender();
 						}
 					},
+					getBounds: () => handle.getBounds(),
 					isHidden: () => handle.isHidden(),
 					focus: () => handle.focus(),
 					unfocus: (options) => handle.unfocus(options),

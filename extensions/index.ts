@@ -120,6 +120,7 @@ interface ActiveSession {
 	readonly retiredCwd: string;
 	readonly overlayCancellations: Set<() => void>;
 	footerDisposer: (() => void) | undefined;
+	editor: AtelierEditor | undefined;
 	footerRowReservation: FooterRowReservation | undefined;
 	footerGeneration: number;
 	retired: boolean;
@@ -323,8 +324,10 @@ export default function atelierExtension(
 		// Invalidate callbacks before touching Pi so a failed removal cannot leave a live footer.
 		session.footerGeneration += 1;
 		const footerDisposer = session.footerDisposer;
+		const editor = session.editor;
 		const footerRowReservation = session.footerRowReservation;
 		session.footerDisposer = undefined;
+		session.editor = undefined;
 		session.footerRowReservation = undefined;
 		if (shouldClear) {
 			// Hand the reserved footer row back before Pi mounts the built-in footer.
@@ -343,6 +346,11 @@ export default function atelierExtension(
 			} catch {
 				// Composer restoration is best-effort and must not mask footer teardown.
 			}
+		}
+		try {
+			editor?.dispose();
+		} catch {
+			// Restore terminal cursor state even when Pi cannot remove the editor.
 		}
 		try {
 			footerDisposer?.();
@@ -636,7 +644,16 @@ export default function atelierExtension(
 			return component;
 		});
 		try {
-			ctx.ui.setEditorComponent((tui, theme, keybindings) => new AtelierEditor(tui, theme, keybindings));
+			ctx.ui.setEditorComponent((tui, theme, keybindings) => {
+				const editor = new AtelierEditor(tui, theme, keybindings);
+				if (enabled && activeSession === targetSession && targetSession.footerGeneration === generation) {
+					targetSession.editor?.dispose();
+					targetSession.editor = editor;
+				} else {
+					editor.dispose();
+				}
+				return editor;
+			});
 		} catch {
 			// Composer framing is optional; the Status Rail should still install.
 		}
@@ -834,6 +851,7 @@ export default function atelierExtension(
 				retiredCwd: initializationContext.cwd,
 				overlayCancellations: new Set(),
 				footerDisposer: undefined,
+				editor: undefined,
 				footerRowReservation: undefined,
 				footerGeneration: 0,
 				retired: false,

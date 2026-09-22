@@ -18,7 +18,7 @@ A responsive status rail and activity sidebar for [Pi](https://pi.dev).
 
 ## Requirements
 
-- Pi 0.84.0 or newer
+- Pi 0.87.0 or newer
 - Node.js 22.19.0 or newer
 - Interactive TUI mode
 
@@ -73,6 +73,10 @@ Status rail presets:
 - **classic**: detailed telemetry
 
 The composer uses a rounded frame with inner padding. Thinking-level and bash-mode still color that frame through Pi.
+
+In fullscreen mode (`pi --tui-mode fullscreen`), left-click inside the composer to move the insertion cursor. Wrapped lines, scrolled drafts, Unicode text, and autocomplete clicks respect the frame and editor padding. Drag selection and scrolling remain owned by Pi; regular mode keeps terminal-native mouse behavior.
+
+While the composer is focused, Atelier uses the terminal's native **BlinkingBar** cursor instead of Pi's reverse-video block. Cursor visibility is restored and the shape reset to the terminal default when focus leaves the composer or Atelier is disabled. The terminal controls blink timing and whether blinking fades smoothly; ANSI cursor-style commands cannot force a fade animation.
 
 Pi supports one custom footer and one custom editor at a time. Extension load order determines which chrome is visible.
 
