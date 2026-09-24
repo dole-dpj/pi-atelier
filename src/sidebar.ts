@@ -226,13 +226,6 @@ function sidebarLayout(width: number, config: AtelierConfig): SidebarLayout {
 	};
 }
 
-function activityRole(activity: SidebarSnapshot["activity"]): PaletteRole {
-	if (activity === "error") return "error";
-	if (activity === "warning") return "warning";
-	if (activity === "working") return "working";
-	return "ready";
-}
-
 function activitySymbol(activity: SidebarSnapshot["activity"]): string {
 	if (activity === "error") return "✕";
 	if (activity === "warning") return "▲";
@@ -254,10 +247,7 @@ function agentRows(
 			: "";
 	const activityText = workingLabel ? `${activity} · ${workingLabel}` : activity;
 	const status = theme.bold(
-		palette.paint(
-			activityRole(snapshot.activity),
-			`${activitySymbol(snapshot.activity)} ${activityText || "—"}`,
-		),
+		palette.paint(snapshot.activity, `${activitySymbol(snapshot.activity)} ${activityText || "—"}`),
 	);
 	const model = valueRow(snapshot.modelName || snapshot.modelId, palette, "primary");
 	const provider = snapshot.provider ? palette.paint("muted", display(snapshot.provider).toUpperCase()) : "";
@@ -823,7 +813,7 @@ function activitySidebarGroups(
 			panelRole,
 			rows: [active.row],
 			required: false,
-			dropRank: 35 + (rows.length - index) / 100,
+			dropRank: 35 + (rows.length - index) / 100 + 40,
 		})),
 		...groups.recent.map((recent, index) => ({
 			name: `activityRecent:${recent.id}`,
@@ -832,7 +822,7 @@ function activitySidebarGroups(
 			panelRole,
 			rows: [recent.row],
 			required: false,
-			dropRank: index === 0 ? 30 : 10 + (recentCount - index - 1),
+			dropRank: (index === 0 ? 30 : 10 + (recentCount - index - 1)) + 40,
 		})),
 		{
 			name: "activityAggregate",
@@ -841,7 +831,7 @@ function activitySidebarGroups(
 			panelRole,
 			rows: groups.aggregate,
 			required: false,
-			dropRank: 20,
+			dropRank: 60,
 		},
 	].filter((group) => group.rows.length > 0);
 }
@@ -856,19 +846,29 @@ function trimTrailingBlankRows(rows: string[]): string[] {
 	return rows.slice(0, end);
 }
 
+/** Content rows do not wrap; each contiguous panel adds a header, bottom border, and spacer. */
+function measureGroups(groups: readonly SidebarGroup[]): number {
+	let height = 0;
+	let previous: SidebarGroup | undefined;
+	for (const group of groups) {
+		height += group.rows.length;
+		if (group.panel && (group.panel !== previous?.panel || group.panelId !== previous?.panelId)) {
+			height += 3;
+		}
+		previous = group;
+	}
+	return height;
+}
+
 /**
  * Drops whole groups by `dropRank` until the dock fits its height budget. Scroll regions
  * skip this and render every group, so the viewport scrolls instead of hiding panels.
  */
-function composeGroups(
-	groups: SidebarGroup[],
-	height: number,
-	width: number,
-	palette: AtelierPalette,
-	theme: ThemeLike,
-): SidebarGroup[] {
-	let candidate = nonEmptyGroups(groups);
-	while (renderGroups(candidate, width, palette, theme).length > height) {
+function composeGroups(groups: readonly SidebarGroup[], height: number): SidebarGroup[] {
+	let candidate = groups.filter((group) => group.rows.length > 0);
+	// Recount cheap row metadata after removal so newly adjacent groups share panel chrome.
+	// Painting happens only after selection, never for the discarded candidates.
+	while (measureGroups(candidate) > height) {
 		let dropIndex = -1;
 		let dropRank = Number.POSITIVE_INFINITY;
 		for (const [index, group] of candidate.entries()) {
@@ -921,28 +921,17 @@ export function renderSidebarLines(
 					},
 				]
 			: []),
-		...(config.showSidebarAgent
-			? [
-					{
-						name: "agent",
-						panel: "AGENT",
-						panelId: "agent",
-						panelRole: activityRole(snapshot.activity),
-						panelJewel:
-							snapshot.activity === "working" && Math.floor(now / 400) % 2 === 1
-								? ("✧" as const)
-								: ("✦" as const),
-						rows: agentRows(snapshot, layout, panelContentWidth, palette, theme),
-						required: true,
-						dropRank: Number.POSITIVE_INFINITY,
-					},
-				]
-			: []),
-		...activitySidebarGroups(snapshot, panelContentWidth, palette, now).map((group) => ({
-			...group,
-			required: group.name === "activityCore",
-			dropRank: group.name === "activityCore" ? Number.POSITIVE_INFINITY : group.dropRank + 40,
-		})),
+		{
+			name: "agent",
+			panel: "AGENT",
+			panelId: "agent",
+			panelRole: snapshot.activity,
+			panelJewel: snapshot.activity === "working" && Math.floor(now / 400) % 2 === 1 ? "✧" : "✦",
+			rows: agentRows(snapshot, layout, panelContentWidth, palette, theme),
+			required: true,
+			dropRank: Number.POSITIVE_INFINITY,
+		},
+		...activitySidebarGroups(snapshot, panelContentWidth, palette, now),
 		{
 			name: "statuses",
 			panel: "STATUSES",
@@ -959,7 +948,7 @@ export function renderSidebarLines(
 			panel: "TODOS",
 			panelId: "todos",
 			panelRole: "accent",
-			rows: config.showSidebarTodos ? todosRows(snapshot, palette) : [],
+			rows: todosRows(snapshot, palette),
 			required: false,
 			dropRank: 90,
 		},
@@ -1095,9 +1084,7 @@ export function renderSidebarLines(
 			dropRank: Number.POSITIVE_INFINITY,
 		});
 	}
-	const visibleGroups = scrollable
-		? nonEmptyGroups(ordered)
-		: composeGroups(ordered, safeHeight, contentWidth, palette, theme);
+	const visibleGroups = scrollable ? nonEmptyGroups(ordered) : composeGroups(ordered, safeHeight);
 	const rendered = renderGroups(visibleGroups, contentWidth, palette, theme);
 	// A scroll region owns clipping: content taller than the viewport stays whole, while shorter
 	// content still fills the viewport so no stale rows survive a redraw. The tail is trimmed so
@@ -1249,20 +1236,12 @@ function createDetachedSidebarSnapshot(cwd: string): SidebarSnapshot {
 	});
 }
 
-function cloneSidebarSnapshot(snapshot: SidebarSnapshot): SidebarSnapshot {
-	return structuredClone(snapshot);
-}
-
-function cloneSidebarConfig(config: AtelierConfig): AtelierConfig {
-	return structuredClone(config);
-}
-
 function createRetirableSidebarBinding(options: SidebarControllerOptions): RetirableSidebarBinding {
 	let readSnapshot: (() => SidebarSnapshot) | undefined = options.getSnapshot;
 	let readConfig: (() => AtelierConfig) | undefined = options.getConfig;
 	let readResizing: (() => boolean) | undefined;
 	let snapshot = createDetachedSidebarSnapshot(typeof options.ctx.cwd === "string" ? options.ctx.cwd : "");
-	let config = cloneSidebarConfig(DEFAULT_CONFIG);
+	let config = structuredClone(DEFAULT_CONFIG);
 	return {
 		getSnapshot: () => (readSnapshot ? readSnapshot() : snapshot),
 		getConfig: () => (readConfig ? readConfig() : config),
@@ -1273,14 +1252,14 @@ function createRetirableSidebarBinding(options: SidebarControllerOptions): Retir
 		detach: () => {
 			if (readSnapshot) {
 				try {
-					snapshot = cloneSidebarSnapshot(readSnapshot());
+					snapshot = structuredClone(readSnapshot());
 				} catch {
 					// The inert snapshot is already detached from the retired runtime.
 				}
 			}
 			if (readConfig) {
 				try {
-					config = cloneSidebarConfig(readConfig());
+					config = structuredClone(readConfig());
 				} catch {
 					// Keep the last plain configuration snapshot.
 				}
@@ -1299,7 +1278,6 @@ export function createSidebarController(options: SidebarControllerOptions): Side
 	let generation = 0;
 	let closeOverlay: (() => void) | undefined;
 	let requestOverlayRender: (() => void) | undefined;
-	let splitRequestRender: (() => void) | undefined;
 	let overlayHandle: OverlayHandle | undefined;
 	let animationTimer: ReturnType<typeof setInterval> | undefined;
 	const animationIntervalMs = Math.max(1, Math.trunc(options.animationIntervalMs ?? 1_000));
@@ -1327,7 +1305,6 @@ export function createSidebarController(options: SidebarControllerOptions): Side
 		subscribeInput: (handler) => options.ctx.ui.onTerminalInput(handler),
 		onResizeChange: () => {
 			safely(() => requestOverlayRender?.());
-			safely(() => splitRequestRender?.());
 		},
 		...(options.onWarning ? { onWarning: options.onWarning } : {}),
 		...(options.onError ? { onError: options.onError } : {}),
@@ -1356,7 +1333,6 @@ export function createSidebarController(options: SidebarControllerOptions): Side
 	const clearOverlayCallbacks = () => {
 		closeOverlay = undefined;
 		requestOverlayRender = undefined;
-		splitRequestRender = undefined;
 		overlayHandle = undefined;
 	};
 
@@ -1407,7 +1383,6 @@ export function createSidebarController(options: SidebarControllerOptions): Side
 						safely(split.hide);
 						safely(close);
 					} else {
-						splitRequestRender = () => tui.requestRender();
 						if (enabled && generation === currentGeneration) {
 							closeOverlay = close;
 							requestOverlayRender = () => tui.requestRender();
@@ -1479,8 +1454,8 @@ export function createSidebarController(options: SidebarControllerOptions): Side
 		isResizing: split.isResizing,
 		getWidth: split.getSidebarWidth,
 		requestRender() {
-			safely(() => requestOverlayRender?.());
-			safely(split.requestRender);
+			// Still refresh the overlay if adapter reconciliation fails.
+			if (!safely(split.requestRender)) safely(() => requestOverlayRender?.());
 			syncAnimation();
 		},
 		dispose() {

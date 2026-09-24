@@ -45,6 +45,7 @@ export interface RunActivityTracker {
 	startRun(now?: number): void;
 	startTurn(turnIndex: number): void;
 	startResponse(now?: number): void;
+	resetResponse(): void;
 	updateResponseEstimate(estimatedOutputTokens: number, now?: number): void;
 	finishResponse(outputTokens: number, now?: number): void;
 	startTool(event: ToolExecutionStartEvent, now?: number): void;
@@ -57,7 +58,7 @@ export interface RunActivityTracker {
 
 export interface RunActivityTrackerOptions {
 	cwd: string;
-	onChange?: (snapshot: RunActivitySnapshot) => void;
+	onChange?: () => void;
 }
 
 const MAX_SUMMARY_COLUMNS = 26;
@@ -153,7 +154,7 @@ class DefaultRunActivityTracker implements RunActivityTracker {
 	private completedCount = 0;
 	private failedCount = 0;
 	private readonly cwd: string;
-	private readonly onChange: ((snapshot: RunActivitySnapshot) => void) | undefined;
+	private readonly onChange: (() => void) | undefined;
 
 	constructor(options: RunActivityTrackerOptions) {
 		this.cwd = options.cwd;
@@ -187,6 +188,14 @@ class DefaultRunActivityTracker implements RunActivityTracker {
 
 	startResponse(now?: number): void {
 		this.requestStartedAt = normalizeTimestamp(now ?? Date.now());
+		this.firstTokenAt = undefined;
+		this.performance = undefined;
+		this.notify();
+	}
+
+	/** A response partly observed while disabled has no reliable TTFT or TPS. */
+	resetResponse(): void {
+		this.requestStartedAt = undefined;
 		this.firstTokenAt = undefined;
 		this.performance = undefined;
 		this.notify();
@@ -319,14 +328,14 @@ class DefaultRunActivityTracker implements RunActivityTracker {
 	}
 
 	getSnapshot(): RunActivitySnapshot {
-		const activeTools = freezeToolArray(Array.from(this.activeTools.values()));
-		const recentTools = freezeToolArray(this.recentTools);
+		const activeTools = Object.freeze(Array.from(this.activeTools.values()));
+		const recentTools = Object.freeze([...this.recentTools]);
 		const snapshot: RunActivitySnapshot = {
 			phase: this.phase,
 			...(this.turnNumber === undefined ? {} : { turnNumber: this.turnNumber }),
 			...(this.startedAt === undefined ? {} : { startedAt: this.startedAt }),
 			...(this.durationMs === undefined ? {} : { durationMs: this.durationMs }),
-			...(this.performance === undefined ? {} : { performance: freezePerformance(this.performance) }),
+			...(this.performance === undefined ? {} : { performance: this.performance }),
 			activeTools,
 			recentTools,
 			completedCount: this.completedCount,
@@ -336,7 +345,7 @@ class DefaultRunActivityTracker implements RunActivityTracker {
 	}
 
 	private notify(): void {
-		this.onChange?.(this.getSnapshot());
+		this.onChange?.();
 	}
 
 	private isEmpty(): boolean {
@@ -367,14 +376,6 @@ function freezePerformance(performance: ResponsePerformance): ResponsePerformanc
 
 function freezeTool(tool: ToolActivity): ToolActivity {
 	return Object.freeze({ ...tool });
-}
-
-function cloneTool(tool: ToolActivity): ToolActivity {
-	return freezeTool(tool.durationMs === undefined ? { ...tool } : { ...tool, durationMs: tool.durationMs });
-}
-
-function freezeToolArray(tools: readonly ToolActivity[]): readonly ToolActivity[] {
-	return Object.freeze(tools.map(cloneTool));
 }
 
 function sanitizeToolName(name: string): string {

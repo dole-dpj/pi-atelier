@@ -2,7 +2,7 @@ import { Container, ScrollView, TuiAltScreen, VStack, visibleWidth } from "@eare
 import { describe, expect, it, vi } from "vitest";
 import { DISPLAY_TEMPLATES, legacySegmentsToLayout } from "../src/display.js";
 import { createFooterComponent, renderFooterLine, reserveFooterRow } from "../src/footer.js";
-import { type AtelierConfig, type AtelierState, DEFAULT_CONFIG } from "../src/types.js";
+import { type AtelierConfig, type AtelierState, DEFAULT_CONFIG, type FooterState } from "../src/types.js";
 
 const plainTheme = {
 	fg: (_color: string, text: string) => text,
@@ -10,6 +10,23 @@ const plainTheme = {
 	italic: (text: string) => text,
 };
 const stripAnsi = (text: string) => text.replace(/\u001b\[[0-9;]*m/g, "");
+
+// Expected shell-prompt glyphs are part of the rendered footer contract.
+const icons = {
+	model: "\ueb08",
+	thinking: "\uf0eb",
+	workspace: "\uf07b",
+	git: "\uf418",
+	input: "\uf019",
+	output: "\uf093",
+	cache: "\uf1c0",
+	latency: "\uf017",
+	speed: "\uf0e7",
+	context: "\uf2db",
+	autoCompact: "\uf021",
+	menu: "\uf013",
+	separator: "\ue0b1",
+};
 
 const namedTheme = (name: string) => ({
 	name,
@@ -34,7 +51,8 @@ function plainAt(width: number, config = DEFAULT_CONFIG, renderState = state): s
 }
 
 function firstWidthWithout(text: string, config = DEFAULT_CONFIG, renderState = state): number {
-	for (let width = 180; width >= 20; width -= 1) {
+	expect(plainAt(180, config, renderState)).toContain(text);
+	for (let width = 179; width >= 20; width -= 1) {
 		if (!plainAt(width, config, renderState).includes(text)) return width;
 	}
 	throw new Error(`Expected ${text} to be removed`);
@@ -99,8 +117,8 @@ describe("footer performance", () => {
 		const config = withVisible(["activity", "metrics", "performance", "context", "model", "menu"]);
 		const line = stripAnsi(renderFooterLine(state, config, plainTheme, 160));
 
-		expect(line).toContain("TTFT ~ · TPS ~");
-		expect(stripAnsi(renderFooterLine(state, DEFAULT_CONFIG, plainTheme, 160))).not.toContain("TTFT");
+		expect(line).toContain(`${icons.latency} ~  ${icons.speed} ~`);
+		expect(stripAnsi(renderFooterLine(state, DEFAULT_CONFIG, plainTheme, 160))).not.toContain(icons.latency);
 	});
 
 	it("renders response performance after a response starts", () => {
@@ -114,20 +132,20 @@ describe("footer performance", () => {
 			),
 		);
 
-		expect(line).toContain("TTFT 820ms · TPS ~42.3");
+		expect(line).toContain(`${icons.latency} 820ms  ${icons.speed} ~42.3/s`);
 	});
 
-	it("keeps performance labels muted and dims each value until it is measured", () => {
+	it("keeps performance icons muted and dims each value until it is measured", () => {
 		const config = withVisible(["activity", "metrics", "performance", "context", "model", "menu"]);
 		const theme = namedTheme("dark");
 
 		const idle = renderFooterLine(state, config, theme, 400);
-		expect(idle).toContain(`${darkRgb.muted}TTFT\u001b[39m ${darkRgb.dim}~\u001b[39m`);
-		expect(idle).toContain(`${darkRgb.muted}TPS\u001b[39m ${darkRgb.dim}~\u001b[39m`);
+		expect(idle).toContain(`${darkRgb.muted}${icons.latency}\u001b[39m ${darkRgb.dim}~\u001b[39m`);
+		expect(idle).toContain(`${darkRgb.muted}${icons.speed}\u001b[39m ${darkRgb.dim}~\u001b[39m`);
 
 		const ttftOnly = renderFooterLine({ ...state, performance: { ttftMs: 820 } }, config, theme, 400);
-		expect(ttftOnly).toContain(`${darkRgb.muted}TTFT\u001b[39m ${darkRgb.purple}820ms\u001b[39m`);
-		expect(ttftOnly).toContain(`${darkRgb.muted}TPS\u001b[39m ${darkRgb.dim}~\u001b[39m`);
+		expect(ttftOnly).toContain(`${darkRgb.muted}${icons.latency}\u001b[39m ${darkRgb.purple}820ms\u001b[39m`);
+		expect(ttftOnly).toContain(`${darkRgb.muted}${icons.speed}\u001b[39m ${darkRgb.dim}~\u001b[39m`);
 
 		const measured = renderFooterLine(
 			{ ...state, performance: { ttftMs: 820, tokensPerSecond: 42.34 } },
@@ -135,31 +153,174 @@ describe("footer performance", () => {
 			theme,
 			400,
 		);
-		expect(measured).toContain(`${darkRgb.muted}TPS\u001b[39m ${darkRgb.purple}42.3\u001b[39m`);
+		expect(measured).toContain(`${darkRgb.muted}${icons.speed}\u001b[39m ${darkRgb.purple}42.3\u001b[39m`);
 	});
 
 	describe("responsive performance", () => {
 		it("drops performance as one item when the footer is narrow", () => {
 			const config = withVisible(["activity", "metrics", "performance", "context", "model", "menu"]);
-			const line = stripAnsi(
-				renderFooterLine(
-					{ ...state, performance: { ttftMs: 820, tokensPerSecond: 42.34 } },
-					config,
-					plainTheme,
-					56,
-				),
-			);
+			const measured = { ...state, performance: { ttftMs: 820, tokensPerSecond: 42.34 } };
+			expect(plainAt(160, config, measured)).toContain(`${icons.latency} 820ms  ${icons.speed} 42.3/s`);
+			const line = plainAt(56, config, measured);
 
-			expect(line).not.toContain("TTFT");
+			expect(line).not.toContain(icons.latency);
+			expect(line).not.toContain(icons.speed);
+			expect(line).toContain("● READY");
+			expect(line).toContain(`${icons.context} 27.0%`);
 		});
 	});
 });
 
+describe("composer header and telemetry", () => {
+	const config = withVisible(["activity", "model", "git", "context", "metrics", "performance", "menu"]);
+	const session: FooterState = {
+		...state,
+		workspaceLabel: "pi-atelier",
+		performance: { ttftMs: 820, tokensPerSecond: 42.34 },
+	};
+	const { cacheHitPercent: _cacheHitPercent, ...metricsWithoutHit } = state.metrics;
+	const unmeasured: FooterState = {
+		...state,
+		metrics: { ...metricsWithoutHit, usageAvailable: false, costAvailable: false },
+	};
+
+	it("places session identity in a flowing header and usage in a separate telemetry row", () => {
+		const header = stripAnsi(renderFooterLine(session, config, plainTheme, 160, true, "...", "header"));
+		const telemetry = stripAnsi(renderFooterLine(session, config, plainTheme, 160, true, "...", "telemetry"));
+		expect(header).toBe(
+			`● READY ${icons.separator} ${icons.model} gpt-5.6-sol · ${icons.thinking} medium ${icons.separator} ${icons.workspace} pi-atelier · ${icons.git} main* ${icons.separator} ${icons.context} 27.0% / 372k ${icons.autoCompact}`,
+		);
+		for (const marker of ["● READY", "gpt-5.6-sol", "pi-atelier", "main*", `${icons.context} 27.0%`]) {
+			expect(telemetry).not.toContain(marker);
+		}
+		for (const marker of [
+			`${icons.input} 324k`,
+			`${icons.output} 15k`,
+			`${icons.cache} 99%`,
+			"$5.041 (sub)",
+			`${icons.latency} 820ms  ${icons.speed} 42.3/s`,
+			`${icons.menu} ⌥A`,
+		]) {
+			expect(telemetry).toContain(marker);
+			expect(header).not.toContain(marker);
+		}
+		expect(telemetry.startsWith(`${icons.input} 324k  ${icons.output} 15k`)).toBe(true);
+		expect(telemetry.endsWith(`${icons.menu} ⌥A`)).toBe(true);
+		expect(visibleWidth(telemetry)).toBe(160);
+	});
+
+	it("hides unmeasured telemetry and omits the row when the menu is hidden", () => {
+		const component = createFooterComponent({
+			getState: () => unmeasured,
+			getConfig: () => ({
+				...config,
+				segmentLayout: config.segmentLayout.map((entry) =>
+					entry.id === "menu" ? { ...entry, visible: false } : entry,
+				),
+			}),
+			requestRender: vi.fn(),
+			onBranchChange: () => vi.fn(),
+			theme: plainTheme,
+		});
+		try {
+			expect(component.renderTelemetry(160)).toEqual([]);
+			expect(component.renderHeader(160)).toContain("● READY");
+			const fallback = stripAnsi(component.render(160)[0] ?? "");
+			for (const marker of [
+				`${icons.input} —`,
+				`${icons.output} —`,
+				`${icons.cache} —`,
+				"$—",
+				`${icons.latency} ~`,
+			]) {
+				expect(fallback).toContain(marker);
+			}
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("right-aligns the menu when there are no measured values", () => {
+		const telemetry = stripAnsi(
+			renderFooterLine(unmeasured, config, plainTheme, 80, true, "...", "telemetry"),
+		);
+		expect(telemetry.trim()).toBe(`${icons.menu} ⌥A`);
+		expect(telemetry.endsWith(`${icons.menu} ⌥A`)).toBe(true);
+		expect(visibleWidth(telemetry)).toBe(80);
+	});
+
+	it("retains measured zero values instead of treating them as unavailable", () => {
+		const zero: FooterState = {
+			...state,
+			metrics: { ...state.metrics, input: 0, output: 0, cacheHitPercent: 0, cost: 0 },
+			performance: { ttftMs: 0, tokensPerSecond: 0 },
+		};
+		const telemetry = stripAnsi(renderFooterLine(zero, config, plainTheme, 160, true, "...", "telemetry"));
+		for (const marker of [
+			`${icons.input} 0`,
+			`${icons.output} 0`,
+			`${icons.cache} 0%`,
+			"$0.000",
+			`${icons.latency} 0ms  ${icons.speed} 0.0/s`,
+		]) {
+			expect(telemetry).toContain(marker);
+		}
+		expect(telemetry).not.toMatch(/—|~/);
+	});
+
+	it("returns an empty header rather than clipping essential activity or context", () => {
+		const atBoundary = stripAnsi(
+			renderFooterLine(state, DEFAULT_CONFIG, plainTheme, 17, true, "...", "header"),
+		);
+		expect(atBoundary).toBe(`● READY ${icons.separator} ${icons.context} 27.0%`);
+		for (const width of [16, 12, 1, 0]) {
+			expect(renderFooterLine(state, DEFAULT_CONFIG, plainTheme, width, true, "...", "header")).toBe("");
+		}
+		expect(plainAt(16)).toBe(`● READY  ${icons.context} 27.0%`);
+	});
+
+	it("keeps header animation running when telemetry is rendered afterwards", () => {
+		vi.useFakeTimers();
+		const requestRender = vi.fn();
+		const component = createFooterComponent({
+			getState: () => ({ ...session, activity: "working", workingLabel: "PONDERING" }),
+			getConfig: () => config,
+			requestRender,
+			onBranchChange: () => vi.fn(),
+			theme: plainTheme,
+		});
+		try {
+			expect(component.renderHeader(160)).toContain("PONDERING...");
+			expect(component.renderTelemetry(160)[0]).not.toContain("PONDERING");
+			expect(vi.getTimerCount()).toBe(1);
+			vi.advanceTimersByTime(400);
+			expect(requestRender).toHaveBeenCalledOnce();
+			component.renderTelemetry(160);
+			expect(component.renderHeader(160)).toContain("PONDERING.. ");
+			expect(component.renderHeader(16)).toBe("");
+			component.renderTelemetry(160);
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			component.dispose();
+			vi.useRealTimers();
+		}
+	});
+});
+
 describe("footer", () => {
-	it("renders a quiet two-zone Status Rail at wide widths", () => {
+	it("renders icon groups in the complete footer at wide widths", () => {
 		const line = stripAnsi(renderFooterLine(state, DEFAULT_CONFIG, plainTheme, 160));
-		expect(line).toContain("● READY · gpt-5.6-sol · medium · main*");
-		for (const text of ["in 324k", "out 15k", "cache 99%", "$5.041 (sub)", "ctx 27.0%", "⌥A"]) {
+		expect(line).toContain(
+			`● READY ${icons.separator} ${icons.model} gpt-5.6-sol · ${icons.thinking} medium ${icons.separator} ${icons.git} main*`,
+		);
+		for (const text of [
+			`${icons.input} 324k`,
+			`${icons.output} 15k`,
+			`${icons.cache} 99%`,
+			"$5.041 (sub)",
+			`${icons.context} 27.0%`,
+			"⌥A",
+		]) {
 			expect(line).toContain(text);
 		}
 		expect(line).not.toMatch(/ATELIER|R5\.9M|CH98\.8|◔|✦|MENU/);
@@ -175,31 +336,39 @@ describe("footer", () => {
 		expect(stripAnsi(unnamed)).toContain("gpt-5.6-sol");
 	});
 
-	it("right-aligns readable telemetry", () => {
+	it("right-aligns telemetry in the complete footer", () => {
 		const line = stripAnsi(renderFooterLine(state, DEFAULT_CONFIG, plainTheme, 180));
 		expect(line.endsWith("⌥A")).toBe(true);
 		expect(line.indexOf("● READY")).toBe(0);
-		expect(line.indexOf("in 324k")).toBeGreaterThan(line.indexOf("main*"));
+		expect(line).toContain("main*");
+		expect(line).toContain(`${icons.input} 324k`);
+		expect(line.indexOf(`${icons.input} 324k`)).toBeGreaterThan(line.indexOf("main*"));
 	});
 
-	it("dims identity separators without a zone rule", () => {
+	it("dims group dividers and keeps related identity items together", () => {
 		const line = renderFooterLine(state, DEFAULT_CONFIG, namedTheme("dark"), 400);
+		expect(line).toContain(`${darkRgb.dim} ${icons.separator} \u001b[39m`);
 		expect(line).toContain(`${darkRgb.dim} · \u001b[39m`);
+		expect(stripAnsi(line)).toContain(`${icons.model} gpt-5.6-sol · ${icons.thinking} medium`);
 		expect(stripAnsi(line)).not.toContain("│");
 	});
 
-	it("removes optional information in the approved order", () => {
-		const gitAndThinkingGone = Math.min(firstWidthWithout("main*"), firstWidthWithout("medium"));
-		const costGone = firstWidthWithout("$5.041");
-		const modelGone = firstWidthWithout("gpt-5.6-sol");
-		const inputAndOutputGone = Math.min(firstWidthWithout("in 324k"), firstWidthWithout("out 15k"));
-		const cacheGone = firstWidthWithout("cache 99%");
+	it("drops secondary detail before workspace identity and required context", () => {
 		const menuGone = firstWidthWithout("⌥A");
-		expect(gitAndThinkingGone).toBeGreaterThan(costGone);
-		expect(costGone).toBeGreaterThan(modelGone);
-		expect(modelGone).toBeGreaterThan(inputAndOutputGone);
-		expect(inputAndOutputGone).toBeGreaterThan(cacheGone);
-		expect(cacheGone).toBeGreaterThan(menuGone);
+		const thinkingGone = firstWidthWithout("medium");
+		const costGone = firstWidthWithout("$5.041");
+		const inputGone = firstWidthWithout(`${icons.input} 324k`);
+		const outputGone = firstWidthWithout(`${icons.output} 15k`);
+		const cacheGone = firstWidthWithout(`${icons.cache} 99%`);
+		const gitGone = firstWidthWithout("main*");
+		const modelGone = firstWidthWithout("gpt-5.6-sol");
+		expect(menuGone).toBeGreaterThan(thinkingGone);
+		expect(thinkingGone).toBeGreaterThan(costGone);
+		expect(costGone).toBeGreaterThan(inputGone);
+		expect(inputGone).toBeGreaterThanOrEqual(outputGone);
+		expect(outputGone).toBeGreaterThan(cacheGone);
+		expect(cacheGone).toBeGreaterThan(gitGone);
+		expect(gitGone).toBeGreaterThan(modelGone);
 	});
 
 	it("removes configured brand and extension statuses before Git and thinking", () => {
@@ -224,7 +393,7 @@ describe("footer", () => {
 	it("keeps activity and context after optional information is removed", () => {
 		const line = plainAt(24);
 		expect(line).toContain("● READY");
-		expect(line).toContain("ctx");
+		expect(line).toContain(`${icons.context} 27.0%`);
 		expect(visibleWidth(line)).toBeLessThanOrEqual(24);
 	});
 
@@ -235,7 +404,7 @@ describe("footer", () => {
 	});
 
 	it("uses cache hit for editorial and detailed cache values for classic", () => {
-		expect(plainAt(180, DEFAULT_CONFIG)).toContain("cache 99%");
+		expect(plainAt(180, DEFAULT_CONFIG)).toContain(`${icons.cache} 99%`);
 		const classic = plainAt(180, actualClassicPresetConfig);
 		expect(classic).toContain("read 5.9M");
 		expect(classic).toContain("hit 98.8%");
@@ -246,7 +415,14 @@ describe("footer", () => {
 			...state,
 			extensionStatuses: ["INDEXING"],
 		});
-		for (const text of ["in 324k", "ctx 27.0%", "gpt-5.6-sol", "medium", "main*", "INDEXING"]) {
+		for (const text of [
+			`${icons.input} 324k`,
+			`${icons.context} 27.0%`,
+			"gpt-5.6-sol",
+			"medium",
+			"main*",
+			"INDEXING",
+		]) {
 			expect(classic).toContain(text);
 		}
 		expect(classic).not.toContain("● READY");
@@ -261,18 +437,18 @@ describe("footer", () => {
 			{ name: "nord", fg, bold: (text) => text, italic: (text) => text },
 			180,
 		);
-		expect(line).toContain(`${darkRgb.muted}in\u001b[39m ${darkRgb.blue}324k\u001b[39m`);
-		expect(line).toContain(`${darkRgb.muted}cache\u001b[39m ${darkRgb.cyan}99%\u001b[39m`);
+		expect(line).toContain(`${darkRgb.blue}${icons.input}\u001b[39m ${darkRgb.blue}324k\u001b[39m`);
+		expect(line).toContain(`${darkRgb.cyan}${icons.cache}\u001b[39m ${darkRgb.cyan}99%\u001b[39m`);
 		expect(fg).not.toHaveBeenCalled();
 	});
 
-	it("colors dark-theme values while keeping labels muted", () => {
+	it("colors dark-theme metric icons and values by category", () => {
 		const line = renderFooterLine(state, DEFAULT_CONFIG, namedTheme("dark"), 400);
-		expect(line).toContain(`${darkRgb.muted}in\u001b[39m ${darkRgb.blue}324k\u001b[39m`);
-		expect(line).toContain(`${darkRgb.muted}out\u001b[39m ${darkRgb.purple}15k\u001b[39m`);
-		expect(line).toContain(`${darkRgb.muted}cache\u001b[39m ${darkRgb.cyan}99%\u001b[39m`);
+		expect(line).toContain(`${darkRgb.blue}${icons.input}\u001b[39m ${darkRgb.blue}324k\u001b[39m`);
+		expect(line).toContain(`${darkRgb.purple}${icons.output}\u001b[39m ${darkRgb.purple}15k\u001b[39m`);
+		expect(line).toContain(`${darkRgb.cyan}${icons.cache}\u001b[39m ${darkRgb.cyan}99%\u001b[39m`);
 		expect(line).toContain(`${darkRgb.amber}$5.041\u001b[39m${darkRgb.muted} (sub)\u001b[39m`);
-		expect(line).toContain(`${darkRgb.muted}ctx\u001b[39m ${darkRgb.blue}27.0%\u001b[39m`);
+		expect(line).toContain(`${darkRgb.blue}${icons.context}\u001b[39m ${darkRgb.blue}27.0%\u001b[39m`);
 		expect(line).toContain(`${darkRgb.purple}⌥A\u001b[39m`);
 	});
 
@@ -302,18 +478,6 @@ describe("footer", () => {
 		expect(line).toContain(`${darkRgb.muted}read\u001b[39m ${darkRgb.dim}—\u001b[39m`);
 		expect(line).toContain(`${darkRgb.muted}hit\u001b[39m ${darkRgb.dim}—\u001b[39m`);
 		expect(line).not.toMatch(/\u001b\[38;2;125;211;252m—/);
-	});
-
-	it("renders the selected light theme with the same fixed dark palette", () => {
-		const light = renderFooterLine(state, DEFAULT_CONFIG, namedTheme("light"), 400);
-		const dark = renderFooterLine(state, DEFAULT_CONFIG, namedTheme("dark"), 400);
-		expect(light).toBe(dark);
-		expect(light).toContain(`${darkRgb.blue}324k\u001b[39m`);
-		expect(light).toContain(`${darkRgb.purple}15k\u001b[39m`);
-		expect(light).toContain(`${darkRgb.cyan}99%\u001b[39m`);
-		expect(light).toContain(`${darkRgb.amber}$5.041\u001b[39m`);
-		expect(light).toContain(`${darkRgb.blue}27.0%\u001b[39m`);
-		expect(light).toContain(`${darkRgb.purple}⌥A\u001b[39m`);
 	});
 
 	it("uses state-specific activity colors", () => {
@@ -453,7 +617,7 @@ describe("footer", () => {
 				expect(renderFooterLine(state, DEFAULT_CONFIG, namedTheme(selectedTheme), width)).toBe(dark);
 			}
 			expect(visibleWidth(dark)).toBeLessThanOrEqual(width);
-			expect(stripAnsi(dark)).toContain(width >= 56 ? "ctx" : "● READY");
+			expect(stripAnsi(dark)).toContain(width >= 56 ? icons.context : "● READY");
 		}
 	});
 
@@ -466,7 +630,7 @@ describe("footer", () => {
 	it("keeps required activity and context at the supported narrow boundary", () => {
 		const line = renderFooterLine(state, DEFAULT_CONFIG, plainTheme, 56);
 		expect(line).toContain("● READY");
-		expect(line).toContain("ctx 27.0%");
+		expect(line).toContain(`${icons.context} 27.0%`);
 		expect(line).not.toContain("ATELIER");
 	});
 
@@ -518,11 +682,15 @@ describe("footer", () => {
 		expect(compact).not.toContain("PONDERING");
 
 		const reordered = renderFooterLine(state, withVisible(["context", "metrics"]), plainTheme, 160);
-		expect(reordered.indexOf("ctx 27.0%")).toBeLessThan(reordered.indexOf("in 324k"));
+		expect(reordered).toContain(`${icons.context} 27.0%`);
+		expect(reordered).toContain(`${icons.input} 324k`);
+		expect(reordered.indexOf(`${icons.context} 27.0%`)).toBeLessThan(
+			reordered.indexOf(`${icons.input} 324k`),
+		);
 		const contextOnly = renderFooterLine(state, withVisible(["context"]), plainTheme, 160);
-		expect(contextOnly).toContain("ctx 27.0%");
+		expect(contextOnly).toContain(`${icons.context} 27.0%`);
 		// Required metrics remains visible even when omitted by a legacy-style fixture.
-		expect(contextOnly).toContain("in 324k");
+		expect(contextOnly).toContain(`${icons.input} 324k`);
 		expect(contextOnly).not.toContain("● READY");
 	});
 
@@ -546,7 +714,7 @@ describe("footer", () => {
 		}
 		const narrow = renderFooterLine(extreme, DEFAULT_CONFIG, plainTheme, 40);
 		expect(narrow).toContain("● READY");
-		expect(narrow).toContain("ctx");
+		expect(narrow).toContain(icons.context);
 	});
 
 	it("renders unavailable and non-finite telemetry safely", () => {
@@ -562,7 +730,13 @@ describe("footer", () => {
 			},
 		};
 		const unavailableLine = renderFooterLine(unavailableState, DEFAULT_CONFIG, plainTheme, 160);
-		for (const marker of ["in —", "out —", "cache —", "$—", "ctx —"]) {
+		for (const marker of [
+			`${icons.input} —`,
+			`${icons.output} —`,
+			`${icons.cache} —`,
+			"$—",
+			`${icons.context} —`,
+		]) {
 			expect(unavailableLine).toContain(marker);
 		}
 		const invalidLine = renderFooterLine(
@@ -607,7 +781,7 @@ describe("footer", () => {
 			160,
 		);
 		expect(oversized).toContain("● READY");
-		expect(oversized).toContain("ctx 27.0%");
+		expect(oversized).toContain(`${icons.context} 27.0%`);
 		expect(oversized).not.toContain("xxxxxxxxxx");
 	});
 
@@ -627,8 +801,8 @@ describe("footer", () => {
 			plainTheme,
 			180,
 		);
-		expect(line.match(/in 324k/g)).toHaveLength(1);
-		expect(line.match(/ctx 27\.0%/g)).toHaveLength(1);
+		expect(line.match(/\uf019 324k/g)).toHaveLength(1);
+		expect(line.match(/\uf2db 27\.0%/g)).toHaveLength(1);
 	});
 
 	it("reserves ellipsis width so animated frames never move the model", () => {
@@ -637,10 +811,11 @@ describe("footer", () => {
 			stripAnsi(renderFooterLine(working, DEFAULT_CONFIG, plainTheme, 160, true, dots)),
 		);
 		const modelColumns = lines.map((line) => line.indexOf("gpt-5.6-sol"));
+		expect(modelColumns[0]).toBeGreaterThan(0);
 		expect(new Set(modelColumns).size).toBe(1);
-		expect(lines[0]).toContain("CLAUDING... · gpt-5.6-sol");
-		expect(lines[1]).toContain("CLAUDING..  · gpt-5.6-sol");
-		expect(lines[2]).toContain("CLAUDING.   · gpt-5.6-sol");
+		expect(lines[0]).toContain(`CLAUDING... ${icons.separator} ${icons.model} gpt-5.6-sol`);
+		expect(lines[1]).toContain(`CLAUDING..  ${icons.separator} ${icons.model} gpt-5.6-sol`);
+		expect(lines[2]).toContain(`CLAUDING.   ${icons.separator} ${icons.model} gpt-5.6-sol`);
 	});
 
 	it("renders no Status Rail content while hidden but keeps the state pipeline running", () => {

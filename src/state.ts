@@ -20,6 +20,7 @@ import {
 	type WorkspacePulseInspection,
 	type WorkspacePulseRefresh,
 } from "./workspace-pulse.js";
+
 const SESSION_DISPLAY_OVERRIDE_KEYS = [
 	"preset",
 	"density",
@@ -36,9 +37,10 @@ export interface RuntimeDependencies {
 	displayLayers?: DisplayLayerState;
 	displayProvenance?: DisplayProvenance;
 	autoCompact: boolean | null;
+	enabled?: boolean;
 	random?: () => number;
 	requestRender(): void;
-	inspectWorkspace?(): Promise<WorkspacePulseInspection>;
+	inspectWorkspace?(signal: AbortSignal): Promise<WorkspacePulseInspection>;
 }
 
 export function createInertAtelierState(autoCompact: boolean | null = null): AtelierState {
@@ -62,6 +64,7 @@ export class AtelierRuntime {
 	#displayLayers: DisplayLayerState;
 	#displayProvenance: DisplayProvenance;
 	#disposed = false;
+	#enabled: boolean;
 	#lastWorkspaceData: WorkspacePulseData | undefined;
 	#state: AtelierState;
 
@@ -73,41 +76,57 @@ export class AtelierRuntime {
 		this.#displayProvenance =
 			dependencies.displayProvenance ?? resolveDisplayLayers(this.#displayLayers).provenance;
 		this.#autoCompact = dependencies.autoCompact;
+		this.#enabled = dependencies.enabled ?? true;
 		this.#random = dependencies.random ?? Math.random;
 		this.#requestRender = dependencies.requestRender;
-		const inspectWorkspace = async (): Promise<WorkspacePulseInspection> => {
+		const inspectWorkspace = async (signal: AbortSignal): Promise<WorkspacePulseInspection> => {
 			if (!this.#canInspectWorkspace()) return { kind: "unavailable" };
 			return dependencies.inspectWorkspace
-				? dependencies.inspectWorkspace()
+				? dependencies.inspectWorkspace(signal)
 				: inspectWorkspacePulse({
 						exec: async (command, args, options) =>
 							this.#canInspectWorkspace()
 								? this.#pi.exec(command, args, options)
 								: { stdout: "", stderr: "", code: 1, killed: true },
 						cwd: this.#ctx.cwd,
+						signal,
 					});
 		};
 		this.#workspacePulseRefresh = createWorkspacePulseRefresh({
 			inspect: inspectWorkspace,
 			publish: (inspection) => this.#applyWorkspacePulseInspection(inspection),
 		});
-		this.#state = this.#inertState(this.#ctx.getContextUsage());
+		this.#workspacePulseRefresh.setEnabled(this.#enabled);
+		this.#state = this.#inertState();
 		if (!this.#ctx.isProjectTrusted()) {
 			this.#state = { ...this.#state, workspacePulse: { status: "unavailable" } };
 		}
 		this.refreshUsage();
 	}
 
-	/** State with no branch, workspace data, or usage history; context is included only when explicit. */
-	#inertState(context: ReturnType<ExtensionContext["getContextUsage"]> = undefined): AtelierState {
+	/** Suspend producers without losing the session's small activity/configuration state. */
+	setEnabled(enabled: boolean): void {
+		if (this.#disposed || this.#enabled === enabled) return;
+		this.#enabled = enabled;
+		this.#workspacePulseRefresh.setEnabled(enabled);
+		if (!enabled) return;
+		this.#state = {
+			...this.#state,
+			workspacePulse: !this.#ctx.isProjectTrusted()
+				? { status: "unavailable" }
+				: this.#lastWorkspaceData
+					? { status: "stale", data: this.#lastWorkspaceData }
+					: { status: "inspecting" },
+		};
+		this.refreshUsage();
+		void this.flushWorkspacePulseRefresh();
+	}
+
+	/** State with no branch, workspace data, context, or usage history. */
+	#inertState(): AtelierState {
 		return {
 			...createInertAtelierState(this.#autoCompact),
 			workspacePulse: { status: "inspecting" },
-			metrics: aggregateMetrics([], {
-				subscription: false,
-				autoCompact: this.#autoCompact,
-				...(context ? { context } : {}),
-			}),
 		};
 	}
 
@@ -165,46 +184,29 @@ export class AtelierRuntime {
 		this.replaceSessionDisplayOverride(undefined);
 	}
 
-	setSessionDisplayPatch(patch: DisplayPatch | undefined): void {
-		if (!patch) {
-			this.clearSessionDisplayOverride();
-			return;
-		}
-		this.replaceSessionDisplayOverride({ ...this.getSessionDisplayOverride(), ...structuredClone(patch) });
-	}
-
 	/** Applies a successfully persisted User patch, then safely drops redundant Session fields. */
-	applySavedUserDisplayPatch(patch: DisplayPatch, canonicalizeSession = true): void {
+	applySavedUserDisplayPatch(patch: DisplayPatch): void {
 		this.#displayLayers = {
 			...this.#displayLayers,
 			user: { ...this.#displayLayers.user, ...structuredClone(patch) },
 		};
 		if (patch.sidebarPanelLayout) {
 			const sidebarPanelLayout = patch.sidebarPanelLayout.map((entry) => ({ ...entry }));
-			this.#config = {
-				...this.#config,
-				sidebarPanelLayout,
-				showSidebarAgent:
-					sidebarPanelLayout.find((entry) => entry.id === "agent")?.visible ?? this.#config.showSidebarAgent,
-				showSidebarTodos:
-					sidebarPanelLayout.find((entry) => entry.id === "todos")?.visible ?? this.#config.showSidebarTodos,
-			};
+			this.#config = { ...this.#config, sidebarPanelLayout };
 		}
-		if (canonicalizeSession) {
-			const target = resolveDisplayLayers(this.#displayLayers).display;
-			let session = { ...this.#displayLayers.session };
-			for (const key of ["preset", "density", "segmentLayout"] as const) {
-				if (!(key in session)) continue;
-				const candidate = { ...session };
-				delete candidate[key];
-				const { session: _oldSession, ...lower } = this.#displayLayers;
-				const layers: DisplayLayerState =
-					Object.keys(candidate).length > 0 ? { ...lower, session: candidate } : lower;
-				if (isDeepStrictEqual(resolveDisplayLayers(layers).display, target)) session = candidate;
-			}
+		const target = resolveDisplayLayers(this.#displayLayers).display;
+		let session = { ...this.#displayLayers.session };
+		for (const key of ["preset", "density", "segmentLayout"] as const) {
+			if (!(key in session)) continue;
+			const candidate = { ...session };
+			delete candidate[key];
 			const { session: _oldSession, ...lower } = this.#displayLayers;
-			this.#displayLayers = Object.keys(session).length > 0 ? { ...lower, session } : lower;
+			const layers: DisplayLayerState =
+				Object.keys(candidate).length > 0 ? { ...lower, session: candidate } : lower;
+			if (isDeepStrictEqual(resolveDisplayLayers(layers).display, target)) session = candidate;
 		}
+		const { session: _oldSession, ...lower } = this.#displayLayers;
+		this.#displayLayers = Object.keys(session).length > 0 ? { ...lower, session } : lower;
 		this.#resolveDisplay();
 	}
 
@@ -230,7 +232,7 @@ export class AtelierRuntime {
 	}
 
 	refreshUsage(): void {
-		if (this.#disposed) return;
+		if (this.#disposed || !this.#enabled) return;
 		const messages: UsageMessage[] = [];
 		for (const entry of this.#ctx.sessionManager.getEntries()) {
 			if (entry.type === "message" && entry.message.role === "assistant") {
@@ -260,7 +262,7 @@ export class AtelierRuntime {
 	}
 
 	#canInspectWorkspace(): boolean {
-		return !this.#disposed && this.#ctx.isProjectTrusted();
+		return !this.#disposed && this.#enabled && this.#ctx.isProjectTrusted();
 	}
 
 	scheduleWorkspacePulseRefresh(): void {
@@ -272,7 +274,7 @@ export class AtelierRuntime {
 	}
 
 	#applyWorkspacePulseInspection(inspection: WorkspacePulseInspection): void {
-		if (this.#disposed) return;
+		if (this.#disposed || !this.#enabled) return;
 		if (inspection.kind === "available") {
 			const { kind: _kind, ...data } = inspection;
 			this.#lastWorkspaceData = data;
@@ -327,6 +329,6 @@ export class AtelierRuntime {
 	}
 
 	#invalidate(): void {
-		if (!this.#disposed) this.#requestRender();
+		if (!this.#disposed && this.#enabled) this.#requestRender();
 	}
 }

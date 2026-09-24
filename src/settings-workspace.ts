@@ -140,17 +140,13 @@ function fit(text: string, width: number): string {
 }
 
 function panel(title: string, lines: string[], width: number, theme: ThemeLike, accent = false): string[] {
-	if (width < 4) return lines.map((line) => fit(line, width));
-	const inner = width - 2;
-	const color = accent ? "borderAccent" : "muted";
-	const edge = (text: string) => theme.fg(color, text);
-	const heading = ` ${title} `;
-	const rule = Math.max(0, inner - visibleWidth(heading));
-	return [
-		`${edge("┌")}${theme.bold(theme.fg(accent ? "accent" : "muted", heading))}${edge("─".repeat(rule))}${edge("┐")}`,
-		...lines.map((line) => `${edge("│")}${fit(line, inner)}${edge("│")}`),
-		`${edge("└")}${edge("─".repeat(inner))}${edge("┘")}`,
-	];
+	return panelWithFocus(
+		title,
+		lines.map((line) => ({ line })),
+		width,
+		theme,
+		accent,
+	).map(({ line }) => line);
 }
 
 interface LayoutLine {
@@ -164,17 +160,18 @@ function panelWithFocus(
 	lines: readonly LayoutLine[],
 	width: number,
 	theme: ThemeLike,
+	accent = false,
 ): LayoutLine[] {
 	const withFocus = (line: string, focused: boolean | undefined): LayoutLine =>
 		focused === undefined ? { line } : { line, focused };
 	if (width < 4) return lines.map(({ line, focused }) => withFocus(fit(line, width), focused));
 	const inner = width - 2;
-	const edge = (text: string) => theme.fg("muted", text);
+	const edge = (text: string) => theme.fg(accent ? "borderAccent" : "muted", text);
 	const heading = ` ${title} `;
 	const rule = Math.max(0, inner - visibleWidth(heading));
 	return [
 		{
-			line: `${edge("┌")}${theme.bold(theme.fg("muted", heading))}${edge("─".repeat(rule))}${edge("┐")}`,
+			line: `${edge("┌")}${theme.bold(theme.fg(accent ? "accent" : "muted", heading))}${edge("─".repeat(rule))}${edge("┐")}`,
 		},
 		...lines.map(({ line, focused }) => withFocus(`${edge("│")}${fit(line, inner)}${edge("│")}`, focused)),
 		{ line: `${edge("└")}${edge("─".repeat(inner))}${edge("┘")}` },
@@ -184,18 +181,17 @@ function panelWithFocus(
 export function createSettingsWorkspace(options: SettingsWorkspaceOptions): SettingsWorkspace {
 	let display = cloneDisplay(options.getDisplaySettings());
 	let focus = 0;
-	let undo: SessionDisplayOverride | undefined;
-	let hasUndo = false;
+	let undo:
+		| { kind: "display"; value: SessionDisplayOverride | undefined }
+		| { kind: "sidebar"; value: SidebarPanelLayout }
+		| undefined;
 	let sidebarDraft: SidebarPanelLayout = (
 		options.getRenderConfig().sidebarPanelLayout ?? DEFAULT_SIDEBAR_PANEL_LAYOUT
 	).map((entry) => ({
 		id: entry.id,
 		visible: entry.visible,
 	}));
-	let sidebarUndo: typeof sidebarDraft | undefined;
-	let hasSidebarUndo = false;
 	let sidebarDirty = false;
-	let lastUndo: "display" | "sidebar" | undefined;
 	let feedback = "";
 	let saving = false;
 	let scrollOffset = 0;
@@ -262,9 +258,7 @@ export function createSettingsWorkspace(options: SettingsWorkspaceOptions): Sett
 		display = cloneDisplay(options.getDisplaySettings());
 	};
 	const commitMutation = (next: DisplaySettings, message: string): void => {
-		undo = cloneOverride(options.getSessionDisplayOverride());
-		hasUndo = true;
-		lastUndo = "display";
+		undo = { kind: "display", value: cloneOverride(options.getSessionDisplayOverride()) };
 		const complete = cloneDisplay(next);
 		complete.preset = derivePresetIdentity(complete);
 		options.replaceSessionDisplayOverride(complete);
@@ -273,41 +267,34 @@ export function createSettingsWorkspace(options: SettingsWorkspaceOptions): Sett
 		request(true);
 	};
 	const recordSidebarUndo = (): void => {
-		sidebarUndo = sidebarDraft.map((entry) => ({ ...entry }));
-		hasSidebarUndo = true;
-		lastUndo = "sidebar";
+		undo = { kind: "sidebar", value: sidebarDraft.map((entry) => ({ ...entry })) };
 	};
 	const revert = (): void => {
-		undo = cloneOverride(options.getSessionDisplayOverride());
-		hasUndo = true;
+		undo = { kind: "display", value: cloneOverride(options.getSessionDisplayOverride()) };
 		options.clearSessionDisplayOverride();
 		refresh();
 		tell("Reverted to Effective lower-layer settings");
 		request(true);
 	};
 	const undoOnce = (): void => {
-		if (lastUndo === "sidebar" && hasSidebarUndo) {
-			sidebarDraft = sidebarUndo?.map((entry) => ({ ...entry })) ?? sidebarDraft;
-			hasSidebarUndo = false;
-			sidebarUndo = undefined;
-			sidebarDirty = true;
-			lastUndo = undefined;
-			tell("Undid the last Sidebar change");
-			request();
-			return;
-		}
-		if (!hasUndo) {
+		const previous = undo;
+		if (!previous) {
 			tell("Nothing to undo", "warning");
 			request();
 			return;
 		}
-		options.replaceSessionDisplayOverride(cloneOverride(undo));
-		hasUndo = false;
 		undo = undefined;
-		lastUndo = undefined;
-		refresh();
-		tell("Undid the last Display change");
-		request(true);
+		if (previous.kind === "sidebar") {
+			sidebarDraft = previous.value;
+			sidebarDirty = true;
+			tell("Undid the last Sidebar change");
+			request();
+		} else {
+			options.replaceSessionDisplayOverride(previous.value);
+			refresh();
+			tell("Undid the last Display change");
+			request(true);
+		}
 	};
 	const save = async (): Promise<void> => {
 		if (saving) return;
@@ -329,8 +316,7 @@ export function createSettingsWorkspace(options: SettingsWorkspaceOptions): Sett
 			refresh();
 			if (sidebarDirty) {
 				sidebarDirty = false;
-				hasSidebarUndo = false;
-				sidebarUndo = undefined;
+				if (undo?.kind === "sidebar") undo = undefined;
 			}
 			tell("Saved as User default");
 		} catch (error) {
@@ -465,7 +451,7 @@ export function createSettingsWorkspace(options: SettingsWorkspaceOptions): Sett
 				{ line: "" },
 				actionLine("save", "Save default", saving ? "saving…" : "S"),
 				actionLine("revert", "Revert session", "R"),
-				actionLine("undo", "Undo", hasUndo ? "U" : "—"),
+				actionLine("undo", "Undo", undo ? "U" : "—"),
 			];
 			const segmentLines: LayoutLine[] = [
 				{ line: options.theme.fg("muted", `  ● shown   ○ hidden   ◆ required   order ${provenance.order}`) },
@@ -649,9 +635,6 @@ export function createSettingsWorkspace(options: SettingsWorkspaceOptions): Sett
 				if (selectedCentralLine <= 0) {
 					scrollOffset = 0;
 					centralLines = [central[0] ?? { line: "" }, { line: fit("↓ more", outerInner) }];
-				} else if (selectedCentralLine >= central.length - 1) {
-					scrollOffset = central.length - 1;
-					centralLines = [{ line: fit("↑ more", outerInner) }, central[scrollOffset] ?? { line: "" }];
 				} else {
 					scrollOffset = selectedCentralLine;
 					centralLines = [{ line: fit("↑ more", outerInner) }, central[scrollOffset] ?? { line: "" }];

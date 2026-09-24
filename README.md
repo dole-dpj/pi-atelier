@@ -8,7 +8,7 @@ A responsive status rail and activity sidebar for [Pi](https://pi.dev).
 
 ## Features
 
-- Responsive one-line status rail
+- Prompt-style session strip built into the composer, with optional Nerd Font icons and compact telemetry below
 - Live agent, tool, context, workspace, usage, and TODO information, kept compact while a Turn is running
 - Model, thinking-level, and tool controls
 - Configurable display presets, segments, and sidebar panels
@@ -21,6 +21,7 @@ A responsive status rail and activity sidebar for [Pi](https://pi.dev).
 - Pi 0.87.0 or newer
 - Node.js 22.19.0 or newer
 - Interactive TUI mode
+- A monospace terminal font; the default icon mode needs a [Nerd Font](#terminal-font), while Plain text mode works without one
 
 ## Install
 
@@ -35,6 +36,22 @@ pi -e ./pi-atelier
 ```
 
 Pi packages run with your system permissions. Review third-party source before installation.
+
+### Terminal font
+
+Without a Nerd Font, open `/atelier` → **Settings → Font mode** and select **Plain text**. This replaces session-strip and footer icons with text labels and ordinary separators while preserving colors, metrics, and responsive layout. The change applies immediately and is saved as a global user preference; project settings and display presets cannot override it. Ordinary Unicode borders remain, so a standard monospace font such as macOS Menlo is sufficient.
+
+Alternatively, add `"nerdFont": false` to `~/.pi/agent/pi-atelier.json` and run `/reload`. Atelier does not attempt to detect installed fonts.
+
+The default **Nerd Font** mode requires a Nerd Font selected in your terminal. macOS does not include Nerd Fonts by default. Install one with [Homebrew](https://formulae.brew.sh/cask/font-jetbrains-mono-nerd-font):
+
+```sh
+brew install --cask font-jetbrains-mono-nerd-font
+```
+
+Then select **JetBrainsMono Nerd Font Mono** in your terminal's font settings. Installing the font alone does not select it for the terminal. On other platforms, install a font from [Nerd Fonts downloads](https://www.nerdfonts.com/font-downloads) and select it in the same way.
+
+Atelier does not bundle or install fonts or change terminal settings. If icons appear as boxes or missing symbols, select **Plain text** or configure a Nerd Font.
 
 ## Use
 
@@ -58,9 +75,11 @@ Commands:
 /atelier enable|disable     # set extension state
 ```
 
+Disabling Atelier hides its UI, pauses usage/history scans and streaming estimates, cancels pending workspace refreshes, and aborts active Git inspection. Small run/tool bookkeeping continues. Re-enabling refreshes usage, TODOs, and workspace state once; show the sidebar again with `/atelier sidebar on`. If a response spans a disabled interval, its TTFT/TPS remains unavailable until the next provider request rather than reporting partial timing.
+
 The sidebar starts visible and hides when the terminal is too narrow. Press `Ctrl+Shift+R` to resize it.
 
-In Pi fullscreen TUI mode, the sidebar is rendered as a separate split-layout child so transcript selection and copy stay scoped to Pi output. Regular TUI mode remains terminal-native, so a rectangular terminal selection can still include sidebar text.
+In Pi fullscreen TUI mode, the sidebar is rendered as a separate split-layout child so transcript selection and copy stay scoped to Pi output. Mouse drags starting in the editor or sidebar also exclude sidebar text from screen selection and copy when no modal is open. Regular TUI mode remains terminal-native, so a rectangular terminal selection can still include sidebar text.
 
 When `@juicesharp/rpiv-ask-user-question` requests input in fullscreen mode, Atelier reserves a separate bottom region for the questionnaire instead of covering the conversation. Questions use at most half the terminal height, leaving the main pane available for review. Scroll over the main pane with the mouse wheel, or use Pi's configured transcript **PageUp / PageDown** shortcuts, while the question keeps keyboard focus. Arrow keys, typing, Enter, and Esc keep their questionnaire behavior. Collapsing or closing the questionnaire releases its space; the tool's default **Ctrl+]** collapse shortcut still works. This also works with the sidebar hidden. Regular mode keeps the tool's native overlay behavior.
 
@@ -74,7 +93,11 @@ Status rail presets:
 - **minimal**: compact layout
 - **classic**: detailed telemetry
 
-The composer uses a rounded frame with inner padding. Thinking-level and bash-mode still color that frame through Pi.
+The composer's top border holds activity, model/thinking, workspace and Git (controlled by the Git segment), and context percentage/capacity in one continuous strip. Violet model text, cyan workspace text, and blue Git text distinguish the groups; context turns amber/red at the configured thresholds. Narrow layouts shorten long names and remove secondary detail before dropping model identity.
+
+The quieter row below shows measured token usage, cache, cost, and response timing. Unmeasured telemetry stays hidden. In Nerd Font mode, [prompt icons](https://starship.rs/presets/nerd-font) identify model, thinking, workspace, Git, input/output, cache, latency, throughput, and context. Plain text mode uses labels such as `git`, `ctx`, `in`, `out`, `TTFT`, and `TPS`. Display presets, visibility, and ordering still apply within each row.
+
+The composer retains its rounded frame, input padding, scroll indicators, and Pi's thinking-level/bash-mode border colors. When a Pi selector replaces the composer, the terminal is below 12 rows tall, or the editor is too narrow for the inset strip, Atelier falls back to the complete status rail below.
 
 In fullscreen mode (`pi --tui-mode fullscreen`), left-click inside the composer to move the insertion cursor. Wrapped lines, scrolled drafts, Unicode text, and autocomplete clicks respect the frame and editor padding. Drag selection and scrolling remain owned by Pi; regular mode keeps terminal-native mouse behavior.
 
@@ -96,11 +119,12 @@ Trusted project configuration:
 <project>/.pi/pi-atelier.json
 ```
 
-Project settings override user settings. Session changes override both. Global sidebar and notification preferences remain user-only.
+Project settings override user settings. Session changes override both. Global font mode, sidebar startup, and notification preferences remain user-only.
 
 ```json
 {
   "preset": "editorial",
+  "nerdFont": true,
   "shortcut": "alt+a",
   "density": "comfortable",
   "contextWarning": 70,
@@ -111,7 +135,7 @@ Project settings override user settings. Session changes override both. Global s
 }
 ```
 
-Use **Settings → Display** to reorder or hide status rail segments and sidebar panels.
+Use **Settings → Display** to reorder or hide status rail segments and sidebar panels. Undo restores the latest Display or Sidebar edit, including a Display Revert. Legacy user settings `showSidebarAgent` and `showSidebarTodos` remain supported when `sidebarPanelLayout` is absent.
 
 ## Privacy
 
@@ -128,6 +152,7 @@ Pi Atelier:
 
 - Shortcut unavailable: use `/atelier`, change `shortcut`, then run `/reload`.
 - Status rail missing: use TUI mode and check for another custom footer.
+- Missing icon glyphs: choose **Settings → Font mode: Plain text**, or select a Nerd Font in your terminal settings.
 - Metric mismatch: token and cost totals cover the session; context usage covers the current model context.
 
 ## Development
@@ -137,7 +162,7 @@ git clone https://github.com/michaelmjhhhh/pi-atelier.git
 cd pi-atelier
 npm install
 npm run check
-npx --no-install pi -e .
+./node_modules/.bin/pi --no-session --no-extensions -e ./extensions/index.ts
 ```
 
 See [CONTRIBUTING.md](https://github.com/michaelmjhhhh/pi-atelier/blob/main/CONTRIBUTING.md).

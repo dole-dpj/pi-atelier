@@ -10,6 +10,20 @@
 - Use a native BlinkingBar cursor while the composer is focused, remove the software block, and restore terminal cursor settings on blur and teardown. Smooth blink animation depends on the terminal.
 - Raise the minimum supported Pi version and development dependencies to 0.87.0 for the native editor mouse API.
 
+## 0.11.0 — 2026-09-23
+
+- Add a global **Font mode** setting with a Plain text option for terminals without Nerd Fonts. Replace footer icons with labels and ordinary separators across the composer, complete footer, and display preview; preserve the default Nerd Font mode. Set `"nerdFont": false` in user configuration to use Plain text on startup ([#67](https://github.com/michaelmjhhhh/pi-atelier/issues/67)).
+- Integrate an original prompt-style session strip into the composer's top border, with colored model/workspace/Git groups, optional Nerd Font icons, and context percentage/capacity. Keep measured usage and timing in a quiet row below, preserve editor scroll hints, and fall back to the complete footer when the composer is unavailable or too narrow.
+- Exclude Sidebar text from fullscreen screen selection and copy when a mouse drag starts outside the transcript, including in the editor or Sidebar. Preserve transcript scrolling and modal selection.
+
+## 0.10.3 — 2026-09-22
+
+- Skip redundant HEAD and diff commands in Workspace Pulse when no tracked files have changed, preserving untracked-file reporting ([#61](https://github.com/michaelmjhhhh/pi-atelier/issues/61)).
+- Measure Sidebar height from row counts instead of repeatedly painting discarded panels, preserving panel order and existing content priorities ([#59](https://github.com/michaelmjhhhh/pi-atelier/issues/59)).
+- Suspend Git inspections, usage/history scans, and streaming token estimates while Atelier is disabled; cancel pending work, reject stale inspection results, and reconcile once on re-enable ([#57](https://github.com/michaelmjhhhh/pi-atelier/issues/57)). Preserve run/tool bookkeeping and reset partially observed response timing.
+- Fix Display Revert followed by Undo restoring an earlier Sidebar edit instead of the Display override.
+- Consolidate configuration resolution and dialog lifecycle handling, use one internal Sidebar visibility layout, and remove unused runtime options and redundant snapshot copying. Legacy persisted Sidebar visibility settings remain supported.
+
 ## 0.10.2 — 2026-09-21
 
 - Preserve Sidebar text and borders beside inline images in regular and fullscreen mode ([#53](https://github.com/michaelmjhhhh/pi-atelier/issues/53)).

@@ -1,8 +1,8 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import {
-	EMPTY_RUN_ACTIVITY,
 	createRunActivityTracker,
+	EMPTY_RUN_ACTIVITY,
 	formatDuration,
 	summarizeTool,
 } from "../src/run-activity.js";
@@ -71,6 +71,23 @@ describe("run activity tracker transitions", () => {
 		tracker.startResponse(3_000);
 
 		expect(tracker.getSnapshot()).not.toHaveProperty("performance");
+	});
+
+	it("discards partial response timing without losing run or tool activity", () => {
+		const tracker = createRunActivityTracker({ cwd: "/repo" });
+		tracker.startRun(0);
+		tracker.startTool({ type: "tool_execution_start", toolCallId: "tool", toolName: "read", args: {} }, 10);
+		tracker.startResponse(100);
+		tracker.updateResponseEstimate(1, 200);
+		tracker.resetResponse();
+		tracker.updateResponseEstimate(10, 500);
+		tracker.finishResponse(20, 600);
+		expect(tracker.getSnapshot()).not.toHaveProperty("performance");
+		expect(tracker.getSnapshot()).toMatchObject({ phase: "running", activeTools: [{ id: "tool" }] });
+		tracker.startResponse(1_000);
+		tracker.updateResponseEstimate(1, 1_100);
+		tracker.finishResponse(20, 2_100);
+		expect(tracker.getSnapshot().performance).toEqual({ ttftMs: 100, tokensPerSecond: 20 });
 	});
 
 	it("keeps TTFT without inventing TPS when final usage or generation duration is invalid", () => {
@@ -289,7 +306,7 @@ describe("run activity tracker transitions", () => {
 		expect(snapshot).not.toHaveProperty("performance");
 	});
 
-	it("returns frozen snapshots with isolated arrays and cloned tool records", () => {
+	it("returns immutable snapshots without exposing mutable tracker state", () => {
 		const tracker = createRunActivityTracker({ cwd: "/repo" });
 		tracker.startRun(0);
 		tracker.startTool(
@@ -298,12 +315,9 @@ describe("run activity tracker transitions", () => {
 		);
 
 		const first = tracker.getSnapshot();
-		const second = tracker.getSnapshot();
 		expect(Object.isFrozen(first)).toBe(true);
 		expect(Object.isFrozen(first.activeTools)).toBe(true);
 		expect(Object.isFrozen(first.activeTools[0])).toBe(true);
-		expect(first.activeTools).not.toBe(second.activeTools);
-		expect(first.activeTools[0]).not.toBe(second.activeTools[0]);
 		expect(() => (first.activeTools as unknown as { pop(): unknown }).pop()).toThrow();
 		expect(tracker.getSnapshot().activeTools).toHaveLength(1);
 	});

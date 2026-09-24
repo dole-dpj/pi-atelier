@@ -56,7 +56,7 @@ export const DEFAULT_SIDEBAR_PANEL_LAYOUT: SidebarPanelLayout = BUILTIN_SIDEBAR_
 const BUILTIN_IDS = new Set<string>(BUILTIN_SIDEBAR_PANEL_IDS);
 // Use a strict end-of-input assertion; JavaScript's `$` also matches before a final line terminator.
 const NAMESPACED_ID = /^[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*(?![\s\S])/;
-const PANEL_ROLES = new Set([
+const PANEL_ROLE_VALUES = [
 	"primary",
 	"accent",
 	"muted",
@@ -69,21 +69,10 @@ const PANEL_ROLES = new Set([
 	"output",
 	"cache",
 	"context",
-]);
+] as const;
+const PANEL_ROLES = new Set<string>(PANEL_ROLE_VALUES);
 
-export type SidebarPanelRole =
-	| "primary"
-	| "accent"
-	| "muted"
-	| "dim"
-	| "ready"
-	| "working"
-	| "warning"
-	| "error"
-	| "input"
-	| "output"
-	| "cache"
-	| "context";
+export type SidebarPanelRole = (typeof PANEL_ROLE_VALUES)[number];
 
 export interface SidebarPanelRow {
 	text: string;
@@ -287,10 +276,6 @@ export function sanitizeSidebarPanelText(value: string, maxChars = SIDEBAR_PANEL
 		.join("");
 }
 
-function fitsSidebarPanelText(value: string, maxChars: number): boolean {
-	return Array.from(cleanSidebarPanelText(value)).length <= maxChars;
-}
-
 function sanitizeContribution(value: unknown): SanitizedSidebarPanelContribution | undefined {
 	if (
 		!isRecord(value) ||
@@ -298,28 +283,27 @@ function sanitizeContribution(value: unknown): SanitizedSidebarPanelContribution
 		typeof value.title !== "string" ||
 		!isSidebarPanelTextWithinRawLimit(value.title, SIDEBAR_PANEL_MAX_RAW_TITLE_CODE_UNITS) ||
 		!Array.isArray(value.rows) ||
-		value.rows.length > SIDEBAR_PANEL_MAX_ROWS ||
-		!fitsSidebarPanelText(value.title, SIDEBAR_PANEL_MAX_TITLE_CHARS)
+		value.rows.length > SIDEBAR_PANEL_MAX_ROWS
 	)
 		return undefined;
+	const title = cleanSidebarPanelText(value.title);
+	if (Array.from(title).length > SIDEBAR_PANEL_MAX_TITLE_CHARS) return undefined;
 	const rows: SidebarPanelRow[] = [];
 	for (const row of value.rows) {
 		const text =
 			typeof row === "string" ? row : isRecord(row) && typeof row.text === "string" ? row.text : undefined;
-		if (
-			text === undefined ||
-			!isSidebarPanelTextWithinRawLimit(text, SIDEBAR_PANEL_MAX_RAW_ROW_CODE_UNITS) ||
-			!fitsSidebarPanelText(text, SIDEBAR_PANEL_MAX_ROW_CHARS)
-		)
+		if (text === undefined || !isSidebarPanelTextWithinRawLimit(text, SIDEBAR_PANEL_MAX_RAW_ROW_CODE_UNITS))
 			return undefined;
+		const cleaned = cleanSidebarPanelText(text);
+		if (Array.from(cleaned).length > SIDEBAR_PANEL_MAX_ROW_CHARS) return undefined;
 		rows.push({
-			text: sanitizeSidebarPanelText(text, SIDEBAR_PANEL_MAX_ROW_CHARS),
+			text: cleaned,
 			...(isRecord(row) && isSidebarPanelRole(row.role) ? { role: row.role } : {}),
 		});
 	}
 	return {
 		id: value.id,
-		title: sanitizeSidebarPanelText(value.title, SIDEBAR_PANEL_MAX_TITLE_CHARS),
+		title,
 		rows,
 		...(isSidebarPanelRole(value.role) ? { role: value.role } : {}),
 	};
@@ -393,10 +377,16 @@ function sidebarPanelDataEqual(first: SidebarPanelData, second: SidebarPanelData
 	);
 }
 
+function cloneSidebarPanelData(panel: SidebarPanelData): SidebarPanelData {
+	return {
+		...panel,
+		rows: panel.rows.map((row) => ({ text: row.text, ...(row.role ? { role: row.role } : {}) })),
+	};
+}
+
 /** Create a lifecycle-safe registry backed only by Pi's public event bus. */
 export function createSidebarPanelRegistry(options: SidebarPanelRegistryOptions = {}): SidebarPanelRegistry {
 	const panels = new Map<string, SidebarPanelData>();
-	const owners = new Map<string, string>();
 	const revisions = new Map<string, number>();
 	let disposed = false;
 	let requestSequence = 0;
@@ -420,12 +410,11 @@ export function createSidebarPanelRegistry(options: SidebarPanelRegistryOptions 
 	const canTrackSource = (source: string): boolean =>
 		revisions.has(source) || revisions.size < SIDEBAR_PANEL_MAX_TRACKED_SOURCES;
 	const canRegister = (panel: SidebarPanelContribution, source: string): boolean => {
-		const owner = owners.get(panel.id);
+		const owner = panels.get(panel.id)?.source;
 		if (owner !== undefined && owner !== source) return false;
 		return panels.has(panel.id) || panels.size < SIDEBAR_PANEL_MAX_PANELS;
 	};
 	const applyRegister = (safe: SanitizedSidebarPanelContribution, resolvedSource: string): boolean => {
-		owners.set(safe.id, resolvedSource);
 		const next: SidebarPanelData = {
 			...safe,
 			available: true,
@@ -445,9 +434,9 @@ export function createSidebarPanelRegistry(options: SidebarPanelRegistryOptions 
 		if (!isSidebarPanelSource(resolvedSource) || !canRegister(safe, resolvedSource)) return false;
 		return applyRegister(safe, resolvedSource);
 	};
-	const canUnregister = (id: ContributedSidebarPanelId, source: string): boolean => owners.get(id) === source;
+	const canUnregister = (id: ContributedSidebarPanelId, source: string): boolean =>
+		panels.get(id)?.source === source;
 	const applyUnregister = (id: ContributedSidebarPanelId): boolean => {
-		owners.delete(id);
 		const removed = panels.delete(id);
 		changed();
 		return removed;
@@ -511,19 +500,10 @@ export function createSidebarPanelRegistry(options: SidebarPanelRegistryOptions 
 		unregister,
 		handleEvent,
 		requestDiscovery,
-		getAvailable: () =>
-			[...panels.values()].map((panel) => ({
-				...panel,
-				rows: panel.rows.map((row) => ({ text: row.text, ...(row.role ? { role: row.role } : {}) })),
-			})),
+		getAvailable: () => [...panels.values()].map(cloneSidebarPanelData),
 		get: (id) => {
 			const panel = panels.get(id);
-			return panel
-				? {
-						...panel,
-						rows: panel.rows.map((row) => ({ text: row.text, ...(row.role ? { role: row.role } : {}) })),
-					}
-				: undefined;
+			return panel ? cloneSidebarPanelData(panel) : undefined;
 		},
 		dispose: () => {
 			if (disposed) return;
@@ -531,7 +511,6 @@ export function createSidebarPanelRegistry(options: SidebarPanelRegistryOptions 
 			unsubscribe?.();
 			unsubscribe = undefined;
 			panels.clear();
-			owners.clear();
 		},
 	};
 }

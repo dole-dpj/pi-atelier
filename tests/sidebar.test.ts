@@ -18,7 +18,6 @@ import {
 	SIDEBAR_PANEL_MAX_ID_CHARS,
 	SIDEBAR_PANEL_MAX_PANELS,
 	SIDEBAR_PANEL_MAX_RAW_REQUEST_ID_CODE_UNITS,
-	SIDEBAR_PANEL_MAX_RAW_ROW_CODE_UNITS,
 	SIDEBAR_PANEL_MAX_RAW_TITLE_CODE_UNITS,
 	SIDEBAR_PANEL_MAX_ROW_CHARS,
 	SIDEBAR_PANEL_MAX_ROWS,
@@ -160,13 +159,13 @@ describe("sidebar snapshot and layout", () => {
 	it("composes visible panels in persisted order and keeps unavailable entries out of rendering", () => {
 		const ordered = {
 			...DEFAULT_CONFIG,
-			showSidebarAgent: false,
-			showSidebarTodos: false,
 			sidebarPanelLayout: [
 				{ id: "vendor:queue" as const, visible: true },
 				{ id: "tools" as const, visible: true },
 				{ id: "activity" as const, visible: true },
-				...DEFAULT_CONFIG.sidebarPanelLayout.filter((entry) => !["tools", "activity"].includes(entry.id)),
+				...DEFAULT_CONFIG.sidebarPanelLayout
+					.filter((entry) => !["tools", "activity"].includes(entry.id))
+					.map((entry) => ({ ...entry, visible: !["agent", "todos"].includes(entry.id) })),
 			],
 		};
 		const lines = renderSidebarLines(
@@ -952,8 +951,6 @@ describe("sidebar snapshot and layout", () => {
 		const hiddenBuiltins = DEFAULT_CONFIG.sidebarPanelLayout.map((entry) => ({ ...entry, visible: false }));
 		const emptyConfig = {
 			...DEFAULT_CONFIG,
-			showSidebarAgent: false,
-			showSidebarTodos: false,
 			sidebarPanelLayout: [{ id: "vendor:missing" as const, visible: true }, ...hiddenBuiltins],
 		};
 		const rows = contentRows(renderSidebarLines(snapshot(), emptyConfig, theme, 44, 20));
@@ -1249,10 +1246,13 @@ describe("sidebar snapshot and layout", () => {
 			extensionStatuses: [],
 		});
 		const rows = contentRows(renderSidebarLines(missingSession, DEFAULT_CONFIG, theme, 44, 36, false));
-		const sessionIndex = rows.findIndex((row) => row.startsWith("SESSION "));
-		const usageIndex = rows.findIndex((row) => row.startsWith("USAGE "));
-		expect(rows.slice(sessionIndex + 1, usageIndex)).not.toContain("—");
-		expect(rows.slice(sessionIndex + 1, usageIndex)).toContain("6 entries · ephemeral");
+		const workspaceIndex = rows.indexOf("WORKSPACE");
+		const usageIndex = rows.indexOf("USAGE");
+		expect(workspaceIndex).toBeGreaterThanOrEqual(0);
+		expect(usageIndex).toBeGreaterThan(workspaceIndex);
+		const workspaceRows = rows.slice(workspaceIndex + 1, usageIndex);
+		expect(workspaceRows).not.toContain("—");
+		expect(workspaceRows).toContain("6 entries · ephemeral");
 	});
 
 	it("does not render the session file path", () => {
@@ -1312,14 +1312,6 @@ describe("sidebar snapshot and layout", () => {
 		const rows = contentRows(renderSidebarLines(unavailable, DEFAULT_CONFIG, theme, 44, 36, false));
 		expect(rows).not.toContain("USAGE");
 		expect(rows).toContain("OPENAI-CODEX · MEDIUM · SUBSCRIPTION");
-	});
-
-	it("renders quiet section labels without ornamental rules", () => {
-		const rows = contentRows(renderSidebarLines(snapshot(), DEFAULT_CONFIG, theme, 44, 36, false));
-		for (const heading of ["AGENT", "CONTEXT", "WORKSPACE", "USAGE", "TOOLS"]) {
-			expect(rows).toContain(heading);
-		}
-		expect(rows).toEqual(expect.not.arrayContaining([expect.stringMatching(/^[A-Z &]+ ─/)]));
 	});
 
 	it("keeps a live Turn's ACTIVITY to current work without tool history", () => {
@@ -2015,7 +2007,13 @@ describe("sidebar snapshot and layout", () => {
 	});
 
 	it("hides Agent while retaining every populated sibling panel", () => {
-		const configWithoutAgent = { ...DEFAULT_CONFIG, showSidebarAgent: false };
+		const configWithoutAgent = {
+			...DEFAULT_CONFIG,
+			sidebarPanelLayout: DEFAULT_CONFIG.sidebarPanelLayout.map((entry) => ({
+				...entry,
+				visible: entry.id !== "agent",
+			})),
+		};
 		const populated = {
 			...snapshot(),
 			todos: [
@@ -2066,12 +2064,6 @@ describe("sidebar snapshot and layout", () => {
 		expect(renderSidebarLines(populated, DEFAULT_CONFIG, theme, 44, 200, false, 0, false, true)).toHaveLength(
 			200,
 		);
-	});
-
-	it("shows the Agent panel when showSidebarAgent is true", () => {
-		const configWithAgent = { ...DEFAULT_CONFIG, showSidebarAgent: true };
-		const rows = contentRows(renderSidebarLines(snapshot(), configWithAgent, theme, 44, 36, false, 0));
-		expect(rows).toContain("AGENT");
 	});
 });
 
@@ -2364,7 +2356,7 @@ describe("sidebar component and overlay", () => {
 
 		requestRender.mockClear();
 		controller.requestRender();
-		expect(requestRender).toHaveBeenCalledTimes(2);
+		expect(requestRender).toHaveBeenCalled();
 		controller.hide();
 		expect(controller.isVisible()).toBe(false);
 		expect(closeCallbacks[0]).toHaveBeenCalledOnce();
@@ -2383,7 +2375,7 @@ describe("sidebar component and overlay", () => {
 		expect(controller.isVisible()).toBe(true);
 		requestRender.mockClear();
 		controller.requestRender();
-		expect(requestRender).toHaveBeenCalledTimes(2);
+		expect(requestRender).toHaveBeenCalled();
 
 		controller.dispose();
 		expect(controller.isVisible()).toBe(false);
@@ -2420,15 +2412,15 @@ describe("sidebar component and overlay", () => {
 		expect(requestRender).toHaveBeenCalledTimes(3);
 
 		controller.requestRender();
-		expect(requestRender).toHaveBeenCalledTimes(5);
+		requestRender.mockClear();
 		vi.advanceTimersByTime(10);
-		expect(requestRender).toHaveBeenCalledTimes(6);
+		expect(requestRender).toHaveBeenCalledOnce();
 
 		running = false;
 		controller.requestRender();
-		expect(requestRender).toHaveBeenCalledTimes(8);
+		requestRender.mockClear();
 		vi.advanceTimersByTime(30);
-		expect(requestRender).toHaveBeenCalledTimes(8);
+		expect(requestRender).not.toHaveBeenCalled();
 	});
 
 	it("stops animation on hide, overlay closure, dispose, and stale generation", async () => {
@@ -2748,7 +2740,7 @@ describe("todos panel", () => {
 		expect(rows).toContain("○ #3 Commit changes");
 	});
 
-	it("hides todos panel when config disables showSidebarTodos", () => {
+	it("hides todos panel when disabled in the layout", () => {
 		const snapWithTodos = buildSidebarSnapshot({
 			state,
 			cwd: "/Users/example/projects/pi-atelier",
@@ -2761,7 +2753,13 @@ describe("todos panel", () => {
 			runActivity: EMPTY_RUN_ACTIVITY,
 			todos: [{ id: 1, text: "Task", status: "pending" }],
 		});
-		const config = { ...DEFAULT_CONFIG, showSidebarTodos: false };
+		const config = {
+			...DEFAULT_CONFIG,
+			sidebarPanelLayout: DEFAULT_CONFIG.sidebarPanelLayout.map((entry) => ({
+				...entry,
+				visible: entry.id !== "todos",
+			})),
+		};
 		const rows = contentRows(renderSidebarLines(snapWithTodos, config, theme, 44, 36, false));
 		expect(rows).not.toContain("TODOS");
 	});

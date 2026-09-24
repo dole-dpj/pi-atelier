@@ -17,6 +17,7 @@ import {
 import { loadConfig, saveUserConfigPatch } from "../src/config.js";
 import { AtelierEditor } from "../src/editor.js";
 import {
+	type AtelierFooterComponent,
 	createFooterComponent,
 	type FooterRowReservation,
 	reserveFooterRow,
@@ -160,7 +161,7 @@ export default function atelierExtension(
 	}
 
 	const requestAllRenders = (targetSession: ActiveSession): void => {
-		if (activeSession !== targetSession) return;
+		if (!enabled || activeSession !== targetSession) return;
 		targetSession.requestFooterRender();
 		targetSession.sidebar.requestRender();
 	};
@@ -206,11 +207,9 @@ export default function atelierExtension(
 
 	interface OldTodoDetails {
 		todos: TodoItem[];
-		nextId: number;
 	}
 	interface NewTaskDetails {
 		tasks: RpivTask[];
-		nextId: number;
 	}
 
 	function isOldTodoDetails(details: unknown): details is OldTodoDetails {
@@ -270,7 +269,7 @@ export default function atelierExtension(
 		return allItems.map(normalizeTodo).filter((item): item is NormalizedTodo => item !== undefined);
 	}
 	function getSidebarSnapshot(targetSession: ActiveSession): SidebarSnapshot {
-		if (targetSession.retired || activeSession !== targetSession) {
+		if (!enabled || targetSession.retired || activeSession !== targetSession) {
 			return buildSidebarSnapshot({
 				state: targetSession.retiredState,
 				cwd: targetSession.retiredCwd,
@@ -518,7 +517,7 @@ export default function atelierExtension(
 			{
 				isVisible: () => activeSession === current && targetSidebar.isVisible(),
 				toggle: () => {
-					if (activeSession === current) targetSidebar.toggle();
+					if (enabled && activeSession === current) targetSidebar.toggle();
 				},
 				isToolListExpanded: () => activeSession === current && targetRuntime.getConfig().showSidebarToolNames,
 				toggleToolList: async () => {
@@ -576,13 +575,17 @@ export default function atelierExtension(
 		const retiredState = targetSession.retiredState;
 		const retiredConfig = targetSession.retiredConfig;
 		if (ctx.mode !== "tui") return;
+		let editor: AtelierEditor | undefined;
+		let footer: AtelierFooterComponent | undefined;
+		let headerRendered = false;
+		let editorInstalled = false;
+		const getCurrentSession = (): ActiveSession | undefined => {
+			const current = activeSession;
+			return enabled && current?.token === token && current.footerGeneration === generation
+				? current
+				: undefined;
+		};
 		ctx.ui.setFooter((tui, theme, footerData) => {
-			const getCurrentSession = (): ActiveSession | undefined => {
-				const current = activeSession;
-				return enabled && current?.token === token && current.footerGeneration === generation
-					? current
-					: undefined;
-			};
 			const footerRequestRender = (): void => {
 				if (getCurrentSession()) tui.requestRender();
 			};
@@ -598,6 +601,7 @@ export default function atelierExtension(
 					const performance = currentSession.runActivity.getSnapshot().performance;
 					return {
 						...currentSession.runtime.getState(),
+						workspaceLabel: basename(currentSession.ctx.cwd),
 						...(branch ? { branch } : {}),
 						...(performance ? { performance } : {}),
 						extensionStatuses: currentSession.extensionStatuses,
@@ -617,15 +621,22 @@ export default function atelierExtension(
 					}),
 				theme: theme as unknown as ThemeLike,
 			});
+			footer = component;
 			const imageCompositor = createImageCompositorBinding(tui);
 			const renderFooter = component.render;
 			component.render = (width) => {
 				imageCompositor.sync();
-				return renderFooter(width);
+				// Selectors can temporarily replace the editor without disposing it.
+				const promptVisible = editorInstalled && headerRendered && editor?.statusLineVisible;
+				headerRendered = false;
+				return promptVisible ? component.renderTelemetry(width) : renderFooter(width);
 			};
 			const disposeFooter = component.dispose;
 			component.dispose = () => {
 				try {
+					if (editor) delete editor.renderStatusLine;
+					editor = undefined;
+					editorInstalled = false;
 					disposeFooter();
 				} finally {
 					imageCompositor.dispose();
@@ -647,17 +658,35 @@ export default function atelierExtension(
 		});
 		try {
 			ctx.ui.setEditorComponent((tui, theme, keybindings) => {
-				const editor = new AtelierEditor(tui, theme, keybindings);
+				const next = new AtelierEditor(tui, theme, keybindings);
+				next.renderStatusLine = (width) => {
+					// Fullscreen Pi crops the top of a tall draft after editor rendering.
+					// Keep essential state in the bottom footer on short terminals.
+					const line =
+						getCurrentSession() && tui.terminal.rows >= 12 ? (footer?.renderHeader(width) ?? "") : "";
+					headerRendered = Boolean(line);
+					return line;
+				};
 				if (enabled && activeSession === targetSession && targetSession.footerGeneration === generation) {
 					targetSession.editor?.dispose();
-					targetSession.editor = editor;
+					targetSession.editor = next;
 				} else {
-					editor.dispose();
+					next.dispose();
 				}
-				return editor;
+				editor = next;
+				return next;
 			});
+			editorInstalled = true;
 		} catch {
 			// Composer framing is optional; the Status Rail should still install.
+			if (editor) delete editor.renderStatusLine;
+			editor = undefined;
+			editorInstalled = false;
+			try {
+				ctx.ui.setEditorComponent(undefined);
+			} catch {
+				// Pi may also reject restoration; leave the complete footer available.
+			}
 		}
 	}
 
@@ -682,6 +711,10 @@ export default function atelierExtension(
 				const current = getActiveSession(ctx);
 				if (!current) {
 					ctx.ui.notify("Pi Atelier is not active in this session", "warning");
+					return;
+				}
+				if (!enabled && sidebarAction !== "off") {
+					ctx.ui.notify("Enable Pi Atelier with /atelier enable before showing its sidebar", "info");
 					return;
 				}
 				if (sidebarAction === "tools") {
@@ -715,6 +748,10 @@ export default function atelierExtension(
 					return;
 				}
 				enabled = false;
+				current.runtime.setEnabled(false);
+				current.runActivity.resetResponse();
+				current.completionNotifier.reset();
+				current.todos = [];
 				current.sidebar.hide();
 				updateExtensionStatuses(current, []);
 				clearFooter(current, true);
@@ -727,9 +764,13 @@ export default function atelierExtension(
 					ctx.ui.notify("Pi Atelier is not active in this session", "warning");
 					return;
 				}
-				enabled = true;
-				installFooter(current);
-				suppressTodoOverlay(current);
+				if (!enabled) {
+					enabled = true;
+					current.todos = reconstructTodos(current.ctx);
+					current.runtime.setEnabled(true);
+					installFooter(current);
+					suppressTodoOverlay(current);
+				}
 				ctx.ui.notify("Pi Atelier enabled", "info");
 				return;
 			}
@@ -790,6 +831,7 @@ export default function atelierExtension(
 				displayLayers: loaded.displayLayers,
 				displayProvenance: loaded.displayProvenance,
 				autoCompact,
+				enabled,
 				requestRender: requestCandidateRenders,
 			});
 			localRuntime = candidateRuntime;
@@ -822,7 +864,8 @@ export default function atelierExtension(
 				getConfig: () =>
 					activeSession?.token === initializationToken ? candidateRuntime.getConfig() : loaded.config,
 				colorEnabled: !("NO_COLOR" in process.env),
-				shouldAnimate: () => activeSession?.token === initializationToken && localRunActivity.isRunning(),
+				shouldAnimate: () =>
+					enabled && activeSession?.token === initializationToken && localRunActivity.isRunning(),
 				isInputRequested: () =>
 					enabled && activeSession?.token === initializationToken && activeSession.askUserBlocked,
 				onWarning: (message) => initializationContext.ui.notify(message, "warning"),
@@ -862,7 +905,7 @@ export default function atelierExtension(
 				unsubscribeAskUserBlocked: undefined,
 				askUserBlocked: false,
 				inputRequestSequence: 0,
-				todos: reconstructTodos(initializationContext),
+				todos: enabled ? reconstructTodos(initializationContext) : [],
 				requestFooterRender: noopRender,
 				extensionStatuses: [],
 			};
@@ -880,6 +923,7 @@ export default function atelierExtension(
 				if (active !== true || current.askUserBlocked) return;
 				current.askUserBlocked = true;
 				current.inputRequestSequence += 1;
+				if (!enabled || !current.runtime.getConfig().completionNotifications) return;
 				current.completionNotifier.inputRequested(
 					`blocked-${current.inputRequestSequence}`,
 					completionNotification(current.ctx, "input-requested", current.runActivity.getSnapshot()),
@@ -975,7 +1019,7 @@ export default function atelierExtension(
 
 	pi.on("session_tree", (_event, ctx) => {
 		const current = getActiveSession(ctx);
-		if (!current) return;
+		if (!enabled || !current) return;
 		current.todos = reconstructTodos(ctx);
 		requestAllRenders(current);
 		suppressTodoOverlay(current);
@@ -996,19 +1040,21 @@ export default function atelierExtension(
 		current.runtime.scheduleWorkspacePulseRefresh();
 	});
 	pi.on("before_provider_request", (_event, ctx) => {
-		getActiveSession(ctx)?.runActivity.startResponse();
+		if (enabled) getActiveSession(ctx)?.runActivity.startResponse();
 	});
 	pi.on("message_update", (event, ctx) => {
+		const current = getActiveSession(ctx);
+		if (!enabled || !current) return;
 		const estimatedOutputTokens = estimateTokens(event.message);
 		if (estimatedOutputTokens <= 0) return;
-		getActiveSession(ctx)?.runActivity.updateResponseEstimate(estimatedOutputTokens);
+		current.runActivity.updateResponseEstimate(estimatedOutputTokens);
 	});
 	pi.on("message_end", (event, ctx) => {
 		if (event.message.role !== "assistant") return;
 		getActiveSession(ctx)?.runActivity.finishResponse(event.message.usage.output);
 	});
 	pi.on("tool_execution_start", (event, ctx) => {
-		getActiveSession(ctx)?.runActivity.startTool(event);
+		getActiveSession(ctx)?.runActivity.startTool(enabled ? event : { ...event, args: undefined });
 	});
 	pi.on("tool_execution_end", (event, ctx) => {
 		const current = getActiveSession(ctx);
@@ -1019,7 +1065,7 @@ export default function atelierExtension(
 	});
 	// Collapse todo tool output when sidebar shows todos
 	pi.on("tool_result", (event, ctx) => {
-		if (event.toolName !== "todo") return;
+		if (!enabled || event.toolName !== "todo") return;
 		const current = getActiveSession(ctx);
 		if (!current || event.isError) return;
 
@@ -1033,13 +1079,7 @@ export default function atelierExtension(
 		const sidebarTodoLayout = current.runtime
 			.getConfig()
 			.sidebarPanelLayout.find((entry) => entry.id === "todos");
-		if (
-			!current.runtime.getConfig().showSidebarTodos ||
-			sidebarTodoLayout?.visible === false ||
-			!sidebarVisible ||
-			todoList.length === 0
-		)
-			return;
+		if (!sidebarTodoLayout?.visible || !sidebarVisible || todoList.length === 0) return;
 		const done = todoList.filter((t) => t.status === "completed").length;
 		return {
 			content: [{ type: "text", text: `${done}/${todoList.length} done · see sidebar` }],
@@ -1050,7 +1090,9 @@ export default function atelierExtension(
 		if (!current || !ctx.isIdle()) return;
 		current.runActivity.settle();
 		current.runtime.setActivity("ready");
+		if (!enabled) return;
 		current.sidebar.requestRender();
+		if (!current.runtime.getConfig().completionNotifications) return;
 		current.completionNotifier.turnSettled(
 			completionNotification(current.ctx, "turn-settled", current.runActivity.getSnapshot()),
 		);
