@@ -1,3 +1,4 @@
+import type { SubagentUsageSnapshot } from "./subagent-usage.js";
 import { applyDisplayTemplate } from "./display.js";
 import { DEFAULT_SIDEBAR_PANEL_LAYOUT } from "./sidebar-panels.js";
 import type { WorkspacePulseData } from "./workspace-pulse.js";
@@ -23,6 +24,7 @@ export type BuiltinSidebarPanelId =
 	| "todos"
 	| "context"
 	| "workspace"
+	| "subagents"
 	| "usage"
 	| "tools";
 /** Stable namespaced IDs are used by contributed panels. */
@@ -107,7 +109,6 @@ export interface AtelierConfig extends DisplaySettings {
 	contextWarning: number;
 	contextDanger: number;
 	currencyDecimals: number;
-	showSessionActions: boolean;
 	showSidebarToolNames: boolean;
 	showSidebarOnStartup: boolean;
 	sidebarPanelLayout: SidebarPanelLayout;
@@ -146,6 +147,7 @@ export interface AtelierState {
 	dirty: boolean;
 	workspacePulse: WorkspacePulseState;
 	metrics: AtelierMetrics;
+	subagentUsage?: SubagentUsageSnapshot;
 	extensionStatuses: readonly string[];
 }
 
@@ -158,11 +160,10 @@ export interface FooterState extends AtelierState {
 export const DEFAULT_CONFIG: AtelierConfig = {
 	...applyDisplayTemplate("editorial"),
 	nerdFont: true,
-	shortcut: "alt+a",
+	shortcut: "f6",
 	contextWarning: 70,
 	contextDanger: 90,
 	currencyDecimals: 3,
-	showSessionActions: true,
 	showSidebarToolNames: false,
 	showSidebarOnStartup: true,
 	sidebarPanelLayout: DEFAULT_SIDEBAR_PANEL_LAYOUT.map((entry) => ({ ...entry })),

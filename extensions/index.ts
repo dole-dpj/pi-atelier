@@ -45,6 +45,9 @@ import {
 	type SidebarPanelRegistry,
 } from "../src/sidebar-panels.js";
 import { AtelierRuntime, createInertAtelierState } from "../src/state.js";
+import { emptySubagentUsage } from "../src/subagent-usage.js";
+import { openSubagentUsage } from "../src/subagent-usage-view.js";
+import { DEFAULT_CONFIG } from "../src/types.js";
 import type {
 	AtelierConfig,
 	AtelierState,
@@ -502,6 +505,26 @@ export default function atelierExtension(
 		];
 	}
 
+	async function openUsage(ctx: ExtensionContext, expected?: ActiveSession): Promise<void> {
+		const current = getActiveSession(ctx);
+		if (ctx.mode !== "tui" || !current || !enabled || (expected && current !== expected)) {
+			ctx.ui.notify("Enable Pi Atelier in a TUI session to view usage", "info");
+			return;
+		}
+		if (!ctx.isProjectTrusted()) {
+			ctx.ui.notify("Subagent metadata requires a trusted project", "info");
+			return;
+		}
+		await current.runtime.refreshSubagentUsage();
+		if (activeSession !== current || !enabled || !ctx.isProjectTrusted()) return;
+		await openSubagentUsage(
+			ctx,
+			current.runtime.getState().subagentUsage ?? emptySubagentUsage(),
+			Math.min(6, Math.max(0, Math.trunc(current.runtime.getConfig().currencyDecimals))),
+			createOverlayLifetime(current.token, current.overlayCancellations),
+		);
+	}
+
 	async function openMenu(ctx: ExtensionContext): Promise<void> {
 		const current = getActiveSession(ctx);
 		if (!current) {
@@ -527,7 +550,10 @@ export default function atelierExtension(
 			},
 			() => requestAllRenders(current),
 			lifecycleGuardedSavePatch(current),
-			{ lifetime: createOverlayLifetime(current.token, current.overlayCancellations) },
+			{
+				lifetime: createOverlayLifetime(current.token, current.overlayCancellations),
+				openUsage: () => openUsage(ctx, current),
+			},
 		);
 	}
 
@@ -695,6 +721,14 @@ export default function atelierExtension(
 		handler: async (args, ctx) => {
 			const parts = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
 			const [action, sidebarAction, ...extra] = parts;
+			if (action === "usage") {
+				if (parts.length !== 1) {
+					ctx.ui.notify("Usage: /atelier usage", "warning");
+					return;
+				}
+				await openUsage(ctx);
+				return;
+			}
 			if (action === "display") {
 				if (sidebarAction !== undefined || extra.length > 0) {
 					ctx.ui.notify("Usage: /atelier display", "warning");
@@ -939,20 +973,22 @@ export default function atelierExtension(
 			if (previousSession) disposeSession(previousSession, { clearFooter: true });
 
 			if (isFresh() && !shortcutRegistered) {
-				try {
-					pi.registerShortcut(loaded.config.shortcut as KeyId, {
+				const registerMenuShortcut = (key: string): void => {
+					pi.registerShortcut(key as KeyId, {
 						description: "Open Pi Atelier",
 						handler: async (shortcutContext) => openMenu(shortcutContext),
 					});
-				} catch {
-					pi.registerShortcut("alt+a" as KeyId, {
-						description: "Open Pi Atelier",
-						handler: async (shortcutContext) => openMenu(shortcutContext),
-					});
-					initializationContext.ui.notify(
-						`Invalid Atelier shortcut "${loaded.config.shortcut}"; using alt+a`,
-						"warning",
-					);
+				};
+				registerMenuShortcut(DEFAULT_CONFIG.shortcut);
+				if (loaded.config.shortcut.toLowerCase() !== DEFAULT_CONFIG.shortcut) {
+					try {
+						registerMenuShortcut(loaded.config.shortcut);
+					} catch {
+						initializationContext.ui.notify(
+							`Cannot register Atelier shortcut "${loaded.config.shortcut}"; ${DEFAULT_CONFIG.shortcut} remains available`,
+							"warning",
+						);
+					}
 				}
 				shortcutRegistered = true;
 			}
@@ -1021,6 +1057,7 @@ export default function atelierExtension(
 		const current = getActiveSession(ctx);
 		if (!enabled || !current) return;
 		current.todos = reconstructTodos(ctx);
+		void current.runtime.refreshSubagentUsage();
 		requestAllRenders(current);
 		suppressTodoOverlay(current);
 	});
@@ -1050,6 +1087,9 @@ export default function atelierExtension(
 		current.runActivity.updateResponseEstimate(estimatedOutputTokens);
 	});
 	pi.on("message_end", (event, ctx) => {
+		if (event.message.role === "custom" && event.message.customType === "subagent-slash-result") {
+			getActiveSession(ctx)?.runtime.observeSubagentMetadata(event.message.details);
+		}
 		if (event.message.role !== "assistant") return;
 		getActiveSession(ctx)?.runActivity.finishResponse(event.message.usage.output);
 	});

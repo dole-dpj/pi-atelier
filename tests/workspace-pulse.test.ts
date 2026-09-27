@@ -1,3 +1,5 @@
+import { disposeAfterTest } from "./helpers/cleanup.js";
+import { deferred, settleMicrotasks } from "./helpers/async.js";
 import { getEventListeners } from "node:events";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,14 +10,6 @@ import {
 	inspectWorkspacePulse,
 	type WorkspacePulseInspection,
 } from "../src/workspace-pulse.js";
-
-function deferred<T>() {
-	let resolve!: (value: T) => void;
-	const promise = new Promise<T>((done) => {
-		resolve = done;
-	});
-	return { promise, resolve };
-}
 
 afterEach(() => {
 	vi.useRealTimers();
@@ -49,7 +43,7 @@ describe("createWorkspacePulseRefresh", () => {
 		vi.useFakeTimers();
 		const inspect = vi.fn().mockResolvedValue(clean);
 		const publish = vi.fn();
-		const refresh = createWorkspacePulseRefresh({ inspect, publish, delayMs: 250 });
+		const refresh = disposeAfterTest(createWorkspacePulseRefresh({ inspect, publish, delayMs: 250 }));
 
 		refresh.request();
 		refresh.request();
@@ -66,9 +60,16 @@ describe("createWorkspacePulseRefresh", () => {
 		vi.useFakeTimers();
 		const first = deferred<WorkspacePulseInspection>();
 		const second = deferred<WorkspacePulseInspection>();
-		const inspect = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+		const secondStarted = deferred<void>();
+		const inspect = vi
+			.fn()
+			.mockReturnValueOnce(first.promise)
+			.mockImplementationOnce(() => {
+				secondStarted.resolve();
+				return second.promise;
+			});
 		const publish = vi.fn();
-		const refresh = createWorkspacePulseRefresh({ inspect, publish, delayMs: 250 });
+		const refresh = disposeAfterTest(createWorkspacePulseRefresh({ inspect, publish, delayMs: 250 }));
 
 		refresh.request();
 		await vi.advanceTimersByTimeAsync(250);
@@ -79,9 +80,11 @@ describe("createWorkspacePulseRefresh", () => {
 		expect(inspect).toHaveBeenCalledOnce();
 
 		first.resolve(clean);
-		await vi.waitFor(() => expect(inspect).toHaveBeenCalledTimes(2));
+		await secondStarted.promise;
+		expect(inspect).toHaveBeenCalledTimes(2);
 		second.resolve(clean);
-		await vi.waitFor(() => expect(publish).toHaveBeenCalledTimes(2));
+		await settleMicrotasks();
+		expect(publish).toHaveBeenCalledTimes(2);
 	});
 
 	it("flushes through a running inspection to guarantee a fresh result", async () => {
@@ -93,15 +96,23 @@ describe("createWorkspacePulseRefresh", () => {
 			branch: "feature/pulse",
 			snapshot: { ...clean.snapshot, trackedFiles: 1 },
 		};
-		const inspect = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+		const secondStarted = deferred<void>();
+		const inspect = vi
+			.fn()
+			.mockReturnValueOnce(first.promise)
+			.mockImplementationOnce(() => {
+				secondStarted.resolve();
+				return second.promise;
+			});
 		const publish = vi.fn();
-		const refresh = createWorkspacePulseRefresh({ inspect, publish, delayMs: 250 });
+		const refresh = disposeAfterTest(createWorkspacePulseRefresh({ inspect, publish, delayMs: 250 }));
 
 		refresh.request();
 		await vi.advanceTimersByTimeAsync(250);
 		const flushed = refresh.flush();
 		first.resolve(clean);
-		await vi.waitFor(() => expect(inspect).toHaveBeenCalledTimes(2));
+		await secondStarted.promise;
+		expect(inspect).toHaveBeenCalledTimes(2);
 		second.resolve(changed);
 		await flushed;
 
@@ -113,7 +124,7 @@ describe("createWorkspacePulseRefresh", () => {
 		const running = deferred<WorkspacePulseInspection>();
 		const inspect = vi.fn().mockReturnValue(running.promise);
 		const publish = vi.fn();
-		const refresh = createWorkspacePulseRefresh({ inspect, publish, delayMs: 250 });
+		const refresh = disposeAfterTest(createWorkspacePulseRefresh({ inspect, publish, delayMs: 250 }));
 
 		refresh.request();
 		await vi.advanceTimersByTimeAsync(250);
@@ -129,7 +140,7 @@ describe("createWorkspacePulseRefresh", () => {
 	it("cancels pending work and accepts no requests while suspended", async () => {
 		vi.useFakeTimers();
 		const inspect = vi.fn().mockResolvedValue(clean);
-		const refresh = createWorkspacePulseRefresh({ inspect, publish: vi.fn() });
+		const refresh = disposeAfterTest(createWorkspacePulseRefresh({ inspect, publish: vi.fn() }));
 		refresh.request();
 		refresh.setEnabled(false);
 		refresh.request();
@@ -146,13 +157,15 @@ describe("createWorkspacePulseRefresh", () => {
 	it("releases suspended flushes but serializes resumption behind an uncooperative inspection", async () => {
 		const first = deferred<WorkspacePulseInspection>();
 		const second = deferred<WorkspacePulseInspection>();
+		const secondStarted = deferred<void>();
 		const signals: AbortSignal[] = [];
 		const inspect = vi.fn((signal: AbortSignal) => {
 			signals.push(signal);
+			if (signals.length === 2) secondStarted.resolve();
 			return signals.length === 1 ? first.promise : second.promise;
 		});
 		const publish = vi.fn();
-		const refresh = createWorkspacePulseRefresh({ inspect, publish });
+		const refresh = disposeAfterTest(createWorkspacePulseRefresh({ inspect, publish }));
 		const suspendedFlush = refresh.flush();
 		refresh.setEnabled(false);
 		expect(signals[0]?.aborted).toBe(true);
@@ -162,7 +175,8 @@ describe("createWorkspacePulseRefresh", () => {
 		const resumedFlush = refresh.flush();
 		expect(inspect).toHaveBeenCalledOnce();
 		first.resolve(clean);
-		await vi.waitFor(() => expect(inspect).toHaveBeenCalledTimes(2));
+		await secondStarted.promise;
+		expect(inspect).toHaveBeenCalledTimes(2);
 		expect(publish).not.toHaveBeenCalled();
 		expect(signals[1]?.aborted).toBe(false);
 		const changed = { ...clean, branch: "resumed" };
@@ -174,13 +188,15 @@ describe("createWorkspacePulseRefresh", () => {
 
 	it("removes cancellation listeners after each completed flush", async () => {
 		let observedSignal: AbortSignal | undefined;
-		const refresh = createWorkspacePulseRefresh({
-			inspect: async (signal) => {
-				observedSignal = signal;
-				return clean;
-			},
-			publish: vi.fn(),
-		});
+		const refresh = disposeAfterTest(
+			createWorkspacePulseRefresh({
+				inspect: async (signal) => {
+					observedSignal = signal;
+					return clean;
+				},
+				publish: vi.fn(),
+			}),
+		);
 		for (let count = 0; count < 50; count += 1) {
 			await refresh.flush();
 			expect(getEventListeners(observedSignal!, "abort")).toHaveLength(0);
@@ -196,7 +212,7 @@ describe("createWorkspacePulseRefresh", () => {
 			signal = current;
 			return pending.promise;
 		});
-		const refresh = createWorkspacePulseRefresh({ inspect, publish });
+		const refresh = disposeAfterTest(createWorkspacePulseRefresh({ inspect, publish }));
 		const flushed = refresh.flush();
 		refresh.dispose();
 		await flushed;
@@ -284,9 +300,17 @@ describe("inspectWorkspacePulse", () => {
 	it("does not report a clean result when cancelled during status", async () => {
 		const controller = new AbortController();
 		const status = deferred<ReturnType<typeof result>>();
-		const exec = vi.fn().mockResolvedValueOnce(result("true\n/repo\n")).mockReturnValueOnce(status.promise);
+		const statusStarted = deferred<void>();
+		const exec = vi
+			.fn()
+			.mockResolvedValueOnce(result("true\n/repo\n"))
+			.mockImplementationOnce(() => {
+				statusStarted.resolve();
+				return status.promise;
+			});
 		const inspection = inspectWorkspacePulse({ exec, cwd: "/repo", signal: controller.signal });
-		await vi.waitFor(() => expect(exec).toHaveBeenCalledTimes(2));
+		await statusStarted.promise;
+		expect(exec).toHaveBeenCalledTimes(2);
 		controller.abort();
 		status.resolve(result("# branch.oid abc\0# branch.head main\0"));
 		await expect(inspection).resolves.toEqual({ kind: "unavailable" });

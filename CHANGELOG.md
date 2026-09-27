@@ -10,6 +10,27 @@
 - Use a native BlinkingBar cursor while the composer is focused, remove the software block, and restore terminal cursor settings on blur and teardown. Smooth blink animation depends on the terminal.
 - Raise the minimum supported Pi version and development dependencies to 0.87.0 for the native editor mouse API.
 
+## 0.12.0 — 2026-09-26
+
+- Keep sidebar plot space reserved while a dialog covers it, instead of switching smooth native curves into character staircases. Restore the plot after the dialog closes.
+
+- Remove the Control Center Actions page, including session details, rename and compaction prompts, and the unused `showSessionActions` setting.
+- Open the subagent graph directly from Control Center → Subagent usage, with the same session and trust checks as `/atelier usage`.
+- Inspect individual reply points in `/atelier usage` with `[` / `]`: highlight the selected observation and show elapsed time, cumulative cost and that reply’s cost.
+
+- Add a graph-only SUBAGENTS panel and framed `/atelier usage` view, with distinct per-child colors, numbered paginated legends, real observation markers and keyboard focus. Plot every readable child history without a six-curve display cap. Kitty-compatible terminals render anti-aliased curves; other terminals retain a text fallback ([#69](https://github.com/michaelmjhhhh/pi-atelier/issues/69)).
+- Preserve distinct same-millisecond replies and receipt-only continuation histories; remove the extra 32-source cutoff while retaining byte limits and explicit partial-data status.
+- Read owner-validated pi-subagents accounting events for reply-level cost history, reconcile completed curves against saved metadata, deduplicate repeated references and refresh only while background work is active. Main-agent usage stays separate.
+
+## 0.11.2 — 2026-09-25
+
+- Restore the terminal cursor after Sidebar cleanup when Pi has already stopped its renderer ([#72](https://github.com/michaelmjhhhh/pi-atelier/issues/72)).
+- Use F6 as the default Control Center shortcut on macOS and Windows, avoiding Option-key text input on macOS. Keyboards with media keys may require Fn+F6 on either platform. Migrate saved Alt+A settings to F6 when loading configuration and stop registering Alt+A. Other custom shortcuts remain available alongside F6 ([#73](https://github.com/michaelmjhhhh/pi-atelier/issues/73)).
+
+## 0.11.1 — 2026-09-24
+
+- Clarify Sidebar metrics with aligned labels and values while retaining separate colored, rounded panels. Remove duplicate idle status, label Git/session/tool details, and show context usage with a continuous fractional-fill meter. Trim metadata before clipping core panels in very short terminals ([#70](https://github.com/michaelmjhhhh/pi-atelier/issues/70)).
+
 ## 0.11.0 — 2026-09-23
 
 - Add a global **Font mode** setting with a Plain text option for terminals without Nerd Fonts. Replace footer icons with labels and ordinary separators across the composer, complete footer, and display preview; preserve the default Nerd Font mode. Set `"nerdFont": false` in user configuration to use Plain text on startup ([#67](https://github.com/michaelmjhhhh/pi-atelier/issues/67)).

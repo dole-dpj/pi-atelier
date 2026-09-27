@@ -1,3 +1,4 @@
+import { deferred } from "./helpers/async.js";
 import { describe, expect, it, vi } from "vitest";
 import { resolveDisplayLayers } from "../src/config.js";
 
@@ -24,14 +25,6 @@ import {
 } from "../src/menu.js";
 import { DEFAULT_CONFIG } from "../src/types.js";
 import { getDisplaySettingsViewportHeight } from "../src/settings-workspace.js";
-
-function deferred<T>() {
-	let resolve!: (value: T) => void;
-	const promise = new Promise<T>((done) => {
-		resolve = done;
-	});
-	return { promise, resolve };
-}
 
 function harness() {
 	let config = {
@@ -70,16 +63,23 @@ function harness() {
 		getAllTools: vi.fn().mockReturnValue([{ name: "read" }, { name: "bash" }]),
 		getActiveTools: vi.fn().mockReturnValue(["read"]),
 		setActiveTools: vi.fn(),
-		setSessionName: vi.fn(),
 	};
 	const ctx = {
 		model: { id: "old", provider: "provider" },
-		ui: { notify: vi.fn(), input: vi.fn(), confirm: vi.fn(), custom: vi.fn() },
-		compact: vi.fn(),
+		ui: { notify: vi.fn(), custom: vi.fn() },
 	};
 	const savePatch = vi.fn().mockResolvedValue(undefined);
 	const actions = createMenuActions(pi as never, ctx as never, runtime as never, "/tmp/user.json", savePatch);
 	return { actions, pi, ctx, runtime, savePatch };
+}
+
+function sidebarControls(): SidebarControls {
+	return {
+		isVisible: vi.fn(() => true),
+		toggle: vi.fn(),
+		isToolListExpanded: vi.fn(() => false),
+		toggleToolList: vi.fn().mockResolvedValue(undefined),
+	};
 }
 
 describe("Control Center presentation", () => {
@@ -92,8 +92,6 @@ describe("Control Center presentation", () => {
 			mode: "tui",
 			model: { id: "old", provider: "provider" },
 			modelRegistry: { getAvailable: vi.fn().mockReturnValue([]) },
-			sessionManager: { getSessionFile: vi.fn().mockReturnValue("/tmp/session.jsonl") },
-			compact: vi.fn(),
 			ui: {
 				notify: vi.fn(),
 				custom: vi.fn((factory: (...args: any[]) => unknown, _options?: unknown) => {
@@ -116,14 +114,9 @@ describe("Control Center presentation", () => {
 		};
 	}
 
-	it("partitions Settings, Controls, and Actions at the root with current Sidebar state", async () => {
+	it("partitions Settings and Controls at the root with current Sidebar state", async () => {
 		rootMenuItems.length = 0;
-		const sidebar: SidebarControls = {
-			isVisible: vi.fn(() => true),
-			toggle: vi.fn(),
-			isToolListExpanded: vi.fn(() => false),
-			toggleToolList: vi.fn().mockResolvedValue(undefined),
-		};
+		const sidebar = sidebarControls();
 		await openAtelierControlCenter(
 			{} as never,
 			contextWithSelections(["close"]) as never,
@@ -131,7 +124,7 @@ describe("Control Center presentation", () => {
 			"/tmp/user.json",
 			sidebar,
 		);
-		expect(rootMenuItems[0]?.map((item) => item.label)).toEqual(["Settings", "Controls", "Actions", "Close"]);
+		expect(rootMenuItems[0]?.map((item) => item.label)).toEqual(["Settings", "Controls", "Close"]);
 		expect(rootMenuItems[0]?.find((item) => item.value === "controls")?.description).toContain("Sidebar: On");
 	});
 
@@ -147,15 +140,9 @@ describe("Control Center presentation", () => {
 				"Back",
 			],
 		],
-		["actions", ["Session details", "Rename session", "Compact session", "Back"]],
 	] as const)("routes the %s root category to its destination", async (category, expectedLabels) => {
 		rootMenuItems.length = 0;
-		const sidebar: SidebarControls = {
-			isVisible: vi.fn(() => true),
-			toggle: vi.fn(),
-			isToolListExpanded: vi.fn(() => false),
-			toggleToolList: vi.fn().mockResolvedValue(undefined),
-		};
+		const sidebar = sidebarControls();
 		await openAtelierControlCenter(
 			{} as never,
 			contextWithSelections([category, "back", "close"]) as never,
@@ -201,7 +188,7 @@ describe("Control Center presentation", () => {
 			h.savePatch,
 			{ lifetime },
 		);
-		await vi.waitFor(() => expect(components).toHaveLength(1));
+		expect(components).toHaveLength(1);
 		components[0].handleInput("\u001b");
 		await opening;
 
@@ -229,7 +216,7 @@ describe("Control Center presentation", () => {
 		const workspace = components[0] as { handleInput(data: string): void };
 		workspace.handleInput(" ");
 		workspace.handleInput("s");
-		await vi.waitFor(() => expect(h.savePatch).toHaveBeenCalledOnce());
+		expect(h.savePatch).toHaveBeenCalledOnce();
 		expect(requestAllRenders).toHaveBeenCalled();
 		expect(h.savePatch).toHaveBeenCalledWith(
 			"/tmp/user.json",
@@ -250,12 +237,7 @@ describe("Control Center presentation", () => {
 			components,
 		);
 		const requestAllRenders = vi.fn();
-		const sidebar: SidebarControls = {
-			isVisible: vi.fn(() => true),
-			toggle: vi.fn(),
-			isToolListExpanded: vi.fn(() => false),
-			toggleToolList: vi.fn().mockResolvedValue(undefined),
-		};
+		const sidebar = sidebarControls();
 		await openAtelierControlCenter(
 			h.pi as never,
 			ctx as never,
@@ -268,19 +250,14 @@ describe("Control Center presentation", () => {
 		const workspace = components[2] as { handleInput(data: string): void };
 		workspace.handleInput(" ");
 		workspace.handleInput("s");
-		await vi.waitFor(() => expect(h.savePatch).toHaveBeenCalledOnce());
+		expect(h.savePatch).toHaveBeenCalledOnce();
 		expect(requestAllRenders).toHaveBeenCalled();
 	});
 
 	it("toggles and persists Sidebar startup from Settings", async () => {
 		rootMenuItems.length = 0;
 		const h = harness();
-		const sidebar: SidebarControls = {
-			isVisible: vi.fn(() => true),
-			toggle: vi.fn(),
-			isToolListExpanded: vi.fn(() => false),
-			toggleToolList: vi.fn().mockResolvedValue(undefined),
-		};
+		const sidebar = sidebarControls();
 
 		await openAtelierControlCenter(
 			h.pi as never,
@@ -299,12 +276,7 @@ describe("Control Center presentation", () => {
 	it("routes Control Center Settings → Display to the workspace", async () => {
 		rootMenuItems.length = 0;
 		const ctx = contextWithSelections(["settings", "display", "workspace-close", "back", "close"]);
-		const sidebar: SidebarControls = {
-			isVisible: vi.fn(() => true),
-			toggle: vi.fn(),
-			isToolListExpanded: vi.fn(() => false),
-			toggleToolList: vi.fn().mockResolvedValue(undefined),
-		};
+		const sidebar = sidebarControls();
 		await openAtelierControlCenter(
 			{} as never,
 			ctx as never,
@@ -328,12 +300,7 @@ describe("Control Center presentation", () => {
 			terminal,
 			customComponents,
 		);
-		const sidebar: SidebarControls = {
-			isVisible: vi.fn(() => true),
-			toggle: vi.fn(),
-			isToolListExpanded: vi.fn(() => false),
-			toggleToolList: vi.fn().mockResolvedValue(undefined),
-		};
+		const sidebar = sidebarControls();
 		await openAtelierControlCenter(
 			{} as never,
 			ctx as never,
@@ -358,12 +325,7 @@ describe("Control Center presentation", () => {
 
 	it("keeps Sidebar visibility in Controls and session-scoped", async () => {
 		rootMenuItems.length = 0;
-		const sidebar: SidebarControls = {
-			isVisible: vi.fn(() => true),
-			toggle: vi.fn(),
-			isToolListExpanded: vi.fn(() => false),
-			toggleToolList: vi.fn().mockResolvedValue(undefined),
-		};
+		const sidebar = sidebarControls();
 		await openAtelierControlCenter(
 			{
 				getThinkingLevel: vi.fn().mockReturnValue("medium"),
@@ -489,25 +451,6 @@ describe("menu actions", () => {
 		expect(h.ctx.ui.notify).toHaveBeenCalledWith("Completion notifications disabled", "info");
 	});
 
-	it("renames a session only after non-empty input", async () => {
-		const h = harness();
-		h.ctx.ui.custom.mockImplementationOnce((factory: (...args: any[]) => any) => {
-			let result: string | undefined;
-			const component = factory(
-				{ requestRender: vi.fn(), terminal: { rows: 36 } },
-				{ fg: (_color: string, text: string) => text, bold: (text: string) => text },
-				{},
-				(value: string | undefined) => {
-					result = value;
-				},
-			);
-			component.handleInput("\r");
-			return Promise.resolve(result);
-		});
-		await h.actions.renameSession();
-		expect(h.pi.setSessionName).toHaveBeenCalledWith("Release prep");
-	});
-
 	it("rolls back tools and reports synchronous action failures", () => {
 		const h = harness();
 		h.pi.setActiveTools.mockImplementationOnce(() => {
@@ -516,12 +459,5 @@ describe("menu actions", () => {
 		h.actions.setTools(["bash"]);
 		expect(h.pi.setActiveTools).toHaveBeenLastCalledWith(["read"]);
 		expect(h.ctx.ui.notify).toHaveBeenCalledWith(expect.stringContaining("tool failure"), "error");
-	});
-
-	it("does not compact without confirmation", async () => {
-		const h = harness();
-		h.ctx.ui.confirm.mockResolvedValue(false);
-		await h.actions.compactSession();
-		expect(h.ctx.compact).not.toHaveBeenCalled();
 	});
 });

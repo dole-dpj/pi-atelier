@@ -1,3 +1,4 @@
+import { disposeAfterTest } from "./helpers/cleanup.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AtelierRuntime } from "../src/state.js";
 import { DEFAULT_CONFIG } from "../src/types.js";
@@ -10,6 +11,7 @@ const assistant = {
 	type: "message",
 	message: {
 		role: "assistant",
+		content: [{ type: "text", text: "private-message-sentinel" }],
 		usage: { input: 100, output: 20, cacheRead: 900, cacheWrite: 0, cost: { total: 0.01 } },
 	},
 };
@@ -43,16 +45,18 @@ function createRuntime(
 		isProjectTrusted: vi.fn().mockReturnValue(true),
 		sessionManager: { getEntries: vi.fn().mockReturnValue([assistant]) },
 	};
-	const runtime = new AtelierRuntime({
-		pi: {} as never,
-		ctx: ctx as never,
-		config: DEFAULT_CONFIG,
-		autoCompact: true,
-		enabled,
-		random,
-		requestRender,
-		inspectWorkspace,
-	});
+	const runtime = disposeAfterTest(
+		new AtelierRuntime({
+			pi: {} as never,
+			ctx: ctx as never,
+			config: DEFAULT_CONFIG,
+			autoCompact: true,
+			enabled,
+			random,
+			requestRender,
+			inspectWorkspace,
+		}),
+	);
 	return { runtime, requestRender, inspectWorkspace, ctx };
 }
 
@@ -117,7 +121,7 @@ describe("AtelierRuntime", () => {
 			provider: "provider",
 			metrics: { input: 100, output: 20, cacheRead: 900, subscription: true, autoCompact: true },
 		});
-		expect(JSON.stringify(runtime.getState())).not.toContain("content");
+		expect(JSON.stringify(runtime.getState())).not.toContain("private-message-sentinel");
 	});
 
 	it("starts inspecting and derives clean or changed Pulse states from successful inspection", async () => {
@@ -237,19 +241,21 @@ describe("AtelierRuntime", () => {
 
 	it("recomputes Session Display patches from retained lower layers with provenance", () => {
 		const requestRender = vi.fn();
-		const runtime = new AtelierRuntime({
-			pi: { exec: vi.fn() } as never,
-			ctx: {
-				modelRegistry: { isUsingOAuth: vi.fn() },
-				getContextUsage: vi.fn(),
-				isProjectTrusted: vi.fn().mockReturnValue(true),
-				sessionManager: { getEntries: vi.fn().mockReturnValue([]) },
-			} as never,
-			config: DEFAULT_CONFIG,
-			displayLayers: { user: { density: "compact" } },
-			autoCompact: null,
-			requestRender,
-		});
+		const runtime = disposeAfterTest(
+			new AtelierRuntime({
+				pi: { exec: vi.fn() } as never,
+				ctx: {
+					modelRegistry: { isUsingOAuth: vi.fn() },
+					getContextUsage: vi.fn(),
+					isProjectTrusted: vi.fn().mockReturnValue(true),
+					sessionManager: { getEntries: vi.fn().mockReturnValue([]) },
+				} as never,
+				config: DEFAULT_CONFIG,
+				displayLayers: { user: { density: "compact" } },
+				autoCompact: null,
+				requestRender,
+			}),
+		);
 		requestRender.mockClear();
 
 		runtime.replaceSessionDisplayOverride({
@@ -287,19 +293,21 @@ describe("AtelierRuntime", () => {
 
 	it("recomputes trusted Project precedence after a successful User Display save", () => {
 		const requestRender = vi.fn();
-		const runtime = new AtelierRuntime({
-			pi: { exec: vi.fn() } as never,
-			ctx: {
-				modelRegistry: { isUsingOAuth: vi.fn() },
-				getContextUsage: vi.fn(),
-				isProjectTrusted: vi.fn().mockReturnValue(true),
-				sessionManager: { getEntries: vi.fn().mockReturnValue([]) },
-			} as never,
-			config: DEFAULT_CONFIG,
-			displayLayers: { project: { density: "comfortable" } },
-			autoCompact: null,
-			requestRender,
-		});
+		const runtime = disposeAfterTest(
+			new AtelierRuntime({
+				pi: { exec: vi.fn() } as never,
+				ctx: {
+					modelRegistry: { isUsingOAuth: vi.fn() },
+					getContextUsage: vi.fn(),
+					isProjectTrusted: vi.fn().mockReturnValue(true),
+					sessionManager: { getEntries: vi.fn().mockReturnValue([]) },
+				} as never,
+				config: DEFAULT_CONFIG,
+				displayLayers: { project: { density: "comfortable" } },
+				autoCompact: null,
+				requestRender,
+			}),
+		);
 		runtime.applySavedUserDisplayPatch({ density: "compact" });
 		expect(runtime.getDisplaySettings().density).toBe("comfortable");
 		expect(runtime.getDisplayProvenance().density).toBe("project");

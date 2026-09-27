@@ -6,25 +6,10 @@ import { loadConfig, saveUserConfigPatch, validateConfig } from "../src/config.j
 import { DISPLAY_TEMPLATES, PRODUCT_SEGMENT_ORDER } from "../src/display.js";
 import { DEFAULT_CONFIG } from "../src/types.js";
 
-let root: string;
-let userPath: string;
-let projectPath: string;
-const writeJson = (path: string, value: unknown) => writeFile(path, JSON.stringify(value), "utf8");
-
-beforeEach(async () => {
-	root = await mkdtemp(join(tmpdir(), "pi-atelier-"));
-	userPath = join(root, "user.json");
-	projectPath = join(root, "project.json");
-});
-
-afterEach(async () => {
-	await rm(root, { recursive: true, force: true });
-});
-
 const visibility = (layout: typeof DEFAULT_CONFIG.segmentLayout, id: string) =>
 	layout.find((entry) => entry.id === id)?.visible;
 
-describe("configuration", () => {
+describe("configuration validation", () => {
 	it("defines complete defaults and compatibility templates", () => {
 		for (const template of [DEFAULT_CONFIG, ...Object.values(DISPLAY_TEMPLATES)]) {
 			expect(template.segmentLayout.map((entry) => entry.id)).toEqual(PRODUCT_SEGMENT_ORDER);
@@ -45,34 +30,9 @@ describe("configuration", () => {
 			"context",
 			"workspace",
 			"usage",
+			"subagents",
 			"tools",
 		]);
-	});
-
-	it("loads an ordered global Sidebar layout with deterministic compatibility precedence", async () => {
-		await writeJson(userPath, {
-			showSidebarAgent: false,
-			showSidebarTodos: false,
-			sidebarPanelLayout: [
-				{ id: "tools", visible: false },
-				{ id: "vendor:queue", visible: false },
-				{ id: "tools", visible: true },
-			],
-		});
-		await writeJson(projectPath, { sidebarPanelLayout: [{ id: "agent", visible: false }] });
-		const result = await loadConfig({
-			userPath,
-			projectPath,
-			projectTrusted: true,
-			session: { sidebarPanelLayout: [] },
-		});
-		expect(result.config.sidebarPanelLayout.slice(0, 2)).toEqual([
-			{ id: "tools", visible: false },
-			{ id: "vendor:queue", visible: false },
-		]);
-		expect(result.config.sidebarPanelLayout.find((entry) => entry.id === "agent")?.visible).toBe(true);
-		expect(result.config.sidebarPanelLayout.find((entry) => entry.id === "todos")?.visible).toBe(true);
-		expect(result.warnings.filter((warning) => warning.includes("duplicate")).length).toBe(1);
 	});
 
 	it("keeps legacy Sidebar visibility compatible when no authoritative layout is present", () => {
@@ -125,84 +85,6 @@ describe("configuration", () => {
 		expect(result.config.sidebarPanelLayout.find((entry) => entry.id === "vendor:queue")?.visible).toBe(true);
 		expect(result.config.sidebarPanelLayout.find((entry) => entry.id === "agent")?.visible).toBe(false);
 		expect(result.config.sidebarPanelLayout.find((entry) => entry.id === "todos")?.visible).toBe(false);
-	});
-
-	it("merges user, trusted project, then session with actionable provenance", async () => {
-		await writeJson(userPath, { density: "compact" });
-		await writeJson(projectPath, {
-			segmentLayout: [
-				{ id: "context", visible: true },
-				{ id: "metrics", visible: true },
-			],
-		});
-		const result = await loadConfig({
-			userPath,
-			projectPath,
-			projectTrusted: true,
-			session: { segmentLayout: [{ id: "brand", visible: true }] },
-		});
-		expect(result.config.density).toBe("compact");
-		expect(result.config.segmentLayout[0]).toEqual({ id: "brand", visible: true });
-		expect(result.displayProvenance.density).toBe("user");
-		expect(result.displayProvenance.order).toBe("session");
-		expect(result.displayProvenance.visibility.brand).toBe("session");
-		expect(result.config.preset).toBe("custom");
-	});
-
-	it("keeps completion notifications as a global user preference", async () => {
-		await writeJson(userPath, { completionNotifications: false });
-		await writeJson(projectPath, { completionNotifications: true });
-		const result = await loadConfig({
-			userPath,
-			projectPath,
-			projectTrusted: true,
-			session: { completionNotifications: true },
-		});
-		expect(result.config.completionNotifications).toBe(false);
-	});
-
-	it("lets a user Agent visibility preference win over trusted project and session values", async () => {
-		await writeJson(userPath, { showSidebarAgent: false });
-		await writeJson(projectPath, { showSidebarAgent: true });
-		const result = await loadConfig({
-			userPath,
-			projectPath,
-			projectTrusted: true,
-			session: { showSidebarAgent: true },
-		});
-		expect(result.config.sidebarPanelLayout.find((entry) => entry.id === "agent")?.visible).toBe(false);
-	});
-
-	it("ignores project and session legacy Sidebar visibility when the user omits it", async () => {
-		await writeJson(projectPath, { showSidebarAgent: false, showSidebarTodos: false });
-		const result = await loadConfig({
-			userPath,
-			projectPath,
-			projectTrusted: true,
-			session: { showSidebarAgent: false, showSidebarTodos: false },
-		});
-		expect(result.config.sidebarPanelLayout.find((entry) => entry.id === "agent")?.visible).toBe(true);
-		expect(result.config.sidebarPanelLayout.find((entry) => entry.id === "todos")?.visible).toBe(true);
-	});
-
-	it("keeps a user legacy TODOS value ahead of trusted project and session values", async () => {
-		await writeJson(userPath, { showSidebarTodos: false });
-		await writeJson(projectPath, { showSidebarTodos: true });
-		const result = await loadConfig({
-			userPath,
-			projectPath,
-			projectTrusted: true,
-			session: { showSidebarTodos: true },
-		});
-		expect(result.config.sidebarPanelLayout.find((entry) => entry.id === "todos")?.visible).toBe(false);
-	});
-
-	it("does not read, warn about, or attribute an untrusted project", async () => {
-		await writeFile(projectPath, "{broken", "utf8");
-		const result = await loadConfig({ userPath, projectPath, projectTrusted: false });
-		expect(result.config).toEqual(DEFAULT_CONFIG);
-		expect(result.warnings).toEqual([]);
-		expect(result.displayProvenance.order).toBe("product");
 	});
 
 	it("makes a usable segmentLayout authoritative over same-layer legacy fields", () => {
@@ -294,30 +176,118 @@ describe("configuration", () => {
 		);
 	});
 
-	it("loads the global Sidebar startup preference only from user config", async () => {
-		await writeJson(userPath, { showSidebarOnStartup: false });
-		await writeJson(projectPath, { showSidebarOnStartup: true });
+	it("rejects non-boolean showSidebarAgent with warning", () => {
+		const result = validateConfig({ showSidebarAgent: "off" });
+		expect(result.config.sidebarPanelLayout.find((entry) => entry.id === "agent")?.visible).toBe(true);
+		expect(result.warnings).toContain("showSidebarAgent must be boolean");
+	});
+});
 
+describe("configuration files", () => {
+	let root: string;
+	let userPath: string;
+	let projectPath: string;
+	const writeJson = (path: string, value: unknown) => writeFile(path, JSON.stringify(value), "utf8");
+
+	beforeEach(async () => {
+		root = await mkdtemp(join(tmpdir(), "pi-atelier-"));
+		userPath = join(root, "user.json");
+		projectPath = join(root, "project.json");
+	});
+
+	afterEach(async () => {
+		await rm(root, { recursive: true, force: true });
+	});
+
+	it.each<[string, Record<string, unknown>]>([
+		["completionNotifications", { completionNotifications: false }],
+		["showSidebarOnStartup", { showSidebarOnStartup: false }],
+		["showSidebarAgent", { sidebarPanelLayout: expect.arrayContaining([{ id: "agent", visible: false }]) }],
+		["showSidebarTodos", { sidebarPanelLayout: expect.arrayContaining([{ id: "todos", visible: false }]) }],
+	])("keeps %s as a global user preference", async (key, expected) => {
+		await writeJson(userPath, { [key]: false });
+		await writeJson(projectPath, { [key]: true });
 		const result = await loadConfig({
 			userPath,
 			projectPath,
 			projectTrusted: true,
-			session: { showSidebarOnStartup: true },
+			session: { [key]: true },
 		});
+		expect(result.config).toMatchObject(expected);
+	});
 
-		expect(result.config.showSidebarOnStartup).toBe(false);
+	it("loads an ordered global Sidebar layout with deterministic compatibility precedence", async () => {
+		await writeJson(userPath, {
+			showSidebarAgent: false,
+			showSidebarTodos: false,
+			sidebarPanelLayout: [
+				{ id: "tools", visible: false },
+				{ id: "vendor:queue", visible: false },
+				{ id: "tools", visible: true },
+			],
+		});
+		await writeJson(projectPath, { sidebarPanelLayout: [{ id: "agent", visible: false }] });
+		const result = await loadConfig({
+			userPath,
+			projectPath,
+			projectTrusted: true,
+			session: { sidebarPanelLayout: [] },
+		});
+		expect(result.config.sidebarPanelLayout.slice(0, 2)).toEqual([
+			{ id: "tools", visible: false },
+			{ id: "vendor:queue", visible: false },
+		]);
+		expect(result.config.sidebarPanelLayout.find((entry) => entry.id === "agent")?.visible).toBe(true);
+		expect(result.config.sidebarPanelLayout.find((entry) => entry.id === "todos")?.visible).toBe(true);
+		expect(result.warnings.filter((warning) => warning.includes("duplicate")).length).toBe(1);
+	});
+
+	it("merges user, trusted project, then session with actionable provenance", async () => {
+		await writeJson(userPath, { density: "compact" });
+		await writeJson(projectPath, {
+			segmentLayout: [
+				{ id: "context", visible: true },
+				{ id: "metrics", visible: true },
+			],
+		});
+		const result = await loadConfig({
+			userPath,
+			projectPath,
+			projectTrusted: true,
+			session: { segmentLayout: [{ id: "brand", visible: true }] },
+		});
+		expect(result.config.density).toBe("compact");
+		expect(result.config.segmentLayout[0]).toEqual({ id: "brand", visible: true });
+		expect(result.displayProvenance.density).toBe("user");
+		expect(result.displayProvenance.order).toBe("session");
+		expect(result.displayProvenance.visibility.brand).toBe("session");
+		expect(result.config.preset).toBe("custom");
+	});
+
+	it("ignores project and session legacy Sidebar visibility when the user omits it", async () => {
+		await writeJson(projectPath, { showSidebarAgent: false, showSidebarTodos: false });
+		const result = await loadConfig({
+			userPath,
+			projectPath,
+			projectTrusted: true,
+			session: { showSidebarAgent: false, showSidebarTodos: false },
+		});
+		expect(result.config.sidebarPanelLayout.find((entry) => entry.id === "agent")?.visible).toBe(true);
+		expect(result.config.sidebarPanelLayout.find((entry) => entry.id === "todos")?.visible).toBe(true);
+	});
+
+	it("does not read, warn about, or attribute an untrusted project", async () => {
+		await writeFile(projectPath, "{broken", "utf8");
+		const result = await loadConfig({ userPath, projectPath, projectTrusted: false });
+		expect(result.config).toEqual(DEFAULT_CONFIG);
+		expect(result.warnings).toEqual([]);
+		expect(result.displayProvenance.order).toBe("product");
 	});
 
 	it("loads persisted showSidebarAgent false from user config", async () => {
 		await writeJson(userPath, { showSidebarAgent: false });
 		const result = await loadConfig({ userPath, projectPath, projectTrusted: false });
 		expect(result.config.sidebarPanelLayout.find((entry) => entry.id === "agent")?.visible).toBe(false);
-	});
-
-	it("rejects non-boolean showSidebarAgent with warning", () => {
-		const result = validateConfig({ showSidebarAgent: "off" });
-		expect(result.config.sidebarPanelLayout.find((entry) => entry.id === "agent")?.visible).toBe(true);
-		expect(result.warnings).toContain("showSidebarAgent must be boolean");
 	});
 
 	it("reports malformed JSON once and retains defaults", async () => {

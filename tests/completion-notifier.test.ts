@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, onTestFinished } from "vitest";
 import {
 	createCompletionNotifier,
 	type CompletionNotification,
@@ -21,15 +21,30 @@ const settled: CompletionNotification = {
 };
 
 function harness(platform: NodeJS.Platform = "linux") {
-	const process = new FakeProcess();
-	const spawn = vi.fn<SpawnNotificationProcess>(() => process);
+	const processes: FakeProcess[] = [];
+	const spawn = vi.fn<SpawnNotificationProcess>(() => {
+		const child = new FakeProcess();
+		processes.push(child);
+		return child;
+	});
 	let enabled = true;
 	const notifier = createCompletionNotifier({
 		platform,
 		spawn,
 		isEnabled: () => enabled,
 	});
-	return { notifier, spawn, process, disable: () => (enabled = false) };
+	onTestFinished(() => notifier.reset());
+	return {
+		notifier,
+		spawn,
+		processes,
+		get process() {
+			const child = processes[0];
+			if (!child) throw new Error("No notification spawned");
+			return child;
+		},
+		disable: () => (enabled = false),
+	};
 }
 
 describe("completion notifier", () => {
@@ -125,9 +140,11 @@ describe("completion notifier", () => {
 		h.notifier.runStarted();
 		h.notifier.turnSettled(settled);
 
+		h.notifier.inputRequested("question-1", { kind: "input-requested", projectName: "pi-atelier" });
 		h.notifier.reset();
 
-		expect(h.process.kill).toHaveBeenCalledOnce();
+		expect(h.processes).toHaveLength(2);
+		for (const child of h.processes) expect(child.kill).toHaveBeenCalledOnce();
 	});
 
 	it("kills a native notification that exceeds its delivery timeout", () => {

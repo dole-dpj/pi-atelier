@@ -1,3 +1,6 @@
+import { plainTheme as theme } from "./helpers/render.js";
+import { settleMicrotasks } from "./helpers/async.js";
+import { requiredRow, requiredIndex } from "./helpers/render.js";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { resolveDisplayLayers } from "../src/config.js";
@@ -8,12 +11,6 @@ import {
 	type DisplayLayerState,
 	type DisplayPatch,
 } from "../src/types.js";
-
-const theme = {
-	fg: (_color: string, text: string) => text,
-	bold: (text: string) => text,
-	italic: (text: string) => text,
-};
 
 function harness(
 	initialLayers: DisplayLayerState = {},
@@ -104,7 +101,8 @@ describe("Display Settings Workspace", () => {
 		for (let index = 0; index < 14 + configuredLayout.length; index += 1) h.component.handleInput("\u001b[B");
 		h.component.handleInput(" ");
 		h.component.handleInput("s");
-		await vi.waitFor(() => expect(h.persist).toHaveBeenCalled());
+		expect(h.persist).toHaveBeenCalled();
+		await settleMicrotasks();
 		expect(h.persist.mock.calls[0]?.[0]).toEqual(
 			expect.objectContaining({
 				sidebarPanelLayout: expect.arrayContaining([
@@ -175,7 +173,8 @@ describe("Display Settings Workspace", () => {
 		const h = harness();
 		h.component.handleInput(" ");
 		h.component.handleInput("s");
-		await vi.waitFor(() => expect(text(h.component)).toContain("Saved as User default"));
+		await settleMicrotasks();
+		expect(text(h.component)).toContain("Saved as User default");
 		expect(h.persist).toHaveBeenCalledOnce();
 		expect(h.layers.user).toMatchObject({ preset: "minimal", density: "compact" });
 		expect(h.close).not.toHaveBeenCalled();
@@ -186,7 +185,8 @@ describe("Display Settings Workspace", () => {
 		h.component.handleInput(" ");
 		h.persist.mockRejectedValueOnce(new Error("disk full"));
 		h.component.handleInput("s");
-		await vi.waitFor(() => expect(text(h.component)).toContain("Save failed: disk full"));
+		await settleMicrotasks();
+		expect(text(h.component)).toContain("Save failed: disk full");
 		expect(h.layers.session).toBeDefined();
 		h.component.handleInput("u");
 		expect(h.layers.session).toBeUndefined();
@@ -343,28 +343,24 @@ describe("Display Settings Workspace", () => {
 		h.component.handleInput("\u001b[B");
 		const after = h.component.render(120);
 		for (const label of ["Preset", "Density"]) {
-			const beforeLine = before.find((line) => line.includes(label));
-			const afterLine = after.find((line) => line.includes(label));
-			expect(beforeLine).toBeDefined();
-			expect(afterLine).toBeDefined();
-			expect(beforeLine?.indexOf(label === "Preset" ? "editorial" : "comfortable")).toBe(
-				afterLine?.indexOf(label === "Preset" ? "editorial" : "comfortable"),
+			const beforeLine = requiredRow(before, label);
+			const afterLine = requiredRow(after, label);
+			expect(beforeLine.indexOf(label === "Preset" ? "editorial" : "comfortable")).toBe(
+				afterLine.indexOf(label === "Preset" ? "editorial" : "comfortable"),
 			);
-			expect(beforeLine?.indexOf("product")).toBe(afterLine?.indexOf("product"));
+			expect(beforeLine.indexOf("product")).toBe(afterLine.indexOf("product"));
 		}
-		const save = before.find((line) => line.includes("Save default"));
-		const revert = before.find((line) => line.includes("Revert session"));
-		const undo = before.find((line) => line.includes("Undo"));
-		expect(save?.lastIndexOf("S")).toBe(revert?.lastIndexOf("R"));
-		expect(revert?.lastIndexOf("R")).toBe(undo?.lastIndexOf("—"));
+		const save = requiredRow(before, "Save default");
+		const revert = requiredRow(before, "Revert session");
+		const undo = requiredRow(before, "Undo");
+		expect(save.lastIndexOf("S")).toBe(revert.lastIndexOf("R"));
+		expect(revert.lastIndexOf("R")).toBe(undo.lastIndexOf("—"));
 	});
 
 	it("uses stacked panels narrowly and equal-bottom side-by-side panels widely", () => {
 		const h = harness();
 		const narrow = h.component.render(40);
-		expect(narrow.findIndex((line) => line.includes(" Display "))).toBeLessThan(
-			narrow.findIndex((line) => line.includes(" Segment Editor ")),
-		);
+		expect(requiredIndex(narrow, " Display ")).toBeLessThan(requiredIndex(narrow, " Segment Editor "));
 		const wide = h.component.render(120);
 		const sideBySide = wide.find((line) => line.includes(" Display ") && line.includes(" Segment Editor "));
 		expect(sideBySide).toBeDefined();
