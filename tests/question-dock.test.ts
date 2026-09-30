@@ -244,6 +244,47 @@ describe("question dock", () => {
 		}
 	});
 
+	it("reads the renderer's wheel accelerator once the public step property is gone", () => {
+		const h = createHarness();
+		try {
+			// Pi 0.99 replaced the public wheelScrollLines number with a private
+			// velocity-aware accelerator. Emulate that renderer shape.
+			const renderer = h.renderer as unknown as {
+				wheelScrollLines?: number;
+				wheelScroll?: { next(direction: -1 | 1, now: number): number };
+			};
+			delete renderer.wheelScrollLines;
+			let steps = 0;
+			renderer.wheelScroll = {
+				next: (direction) => {
+					steps += 1;
+					return direction === -1 ? 2 : 3;
+				},
+			};
+			const top = h.transcript.scrollTop;
+			h.input("\u001b[<64;5;2M");
+			expect(h.transcript.scrollTop).toBe(top - 2);
+			h.input("\u001b[<72;5;2M");
+			expect(h.transcript.scrollTop).toBe(top - 12);
+			expect(steps).toBe(2);
+		} finally {
+			h.dispose();
+		}
+	});
+
+	it("falls back to one wheel line when the renderer exposes no step at all", () => {
+		const h = createHarness();
+		try {
+			const renderer = h.renderer as unknown as { wheelScrollLines?: number };
+			delete renderer.wheelScrollLines;
+			const top = h.transcript.scrollTop;
+			h.input("\u001b[<64;5;2M");
+			expect(h.transcript.scrollTop).toBe(top - 1);
+		} finally {
+			h.dispose();
+		}
+	});
+
 	it("restores the live question and terminal dimensions when Atelier is disposed", () => {
 		const h = createHarness();
 		try {

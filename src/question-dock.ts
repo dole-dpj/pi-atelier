@@ -10,10 +10,26 @@ import {
 import { parseSgrMouseEvent } from "./mouse.js";
 
 // Pi 0.87 keeps viewport geometry and the configured wheel step on its renderer.
+// Pi 0.99 replaces the public step with a private velocity-aware accelerator.
+interface WheelAccelerator {
+	next(direction: -1 | 1, now: number): number;
+}
+
 interface QuestionViewport extends Pick<TuiAltScreen, "scrollBy"> {
 	wheelScrollLines: number;
+	wheelScroll?: WheelAccelerator;
 	getPrimaryScrollView(): ScrollView;
 }
+
+/** Pi <0.99 exposes the configured step; newer Pis step a private accelerator that may be velocity-aware. */
+const wheelStepLines = (viewport: QuestionViewport, direction: -1 | 1): number => {
+	const configured = viewport.wheelScrollLines;
+	if (typeof configured === "number" && configured > 0) return Math.floor(configured);
+	const accelerated = viewport.wheelScroll?.next(direction, performance.now());
+	return accelerated !== undefined && Number.isFinite(accelerated) && accelerated >= 1
+		? Math.floor(accelerated)
+		: 1;
+};
 
 /** Reserve layout space for the questionnaire while Pi still owns its overlay and focus. */
 export function createQuestionDock(tui: TUI, question: Component, getMainWidth: () => number) {
@@ -45,7 +61,7 @@ export function createQuestionDock(tui: TUI, question: Component, getMainWidth: 
 			disposed || !handle || handle.isHidden() ? [] : component.render(width).map(() => ""),
 		invalidate() {},
 	};
-	const removeInputListener = tui.addInputListener((data) => {
+	const handleDockInput = (data: string) => {
 		if (disposed || !handle?.isFocused() || handle.isHidden()) return undefined;
 		const bounds = handle.getBounds();
 		if (!bounds) return undefined;
@@ -62,8 +78,9 @@ export function createQuestionDock(tui: TUI, question: Component, getMainWidth: 
 				mouse.x <= getMainWidth() &&
 				mouse.y <= bounds.row
 			) {
-				const wheelLines = viewport.wheelScrollLines;
-				viewport.scrollBy(((mouse.button & 1) === 0 ? -1 : 1) * wheelLines * (mouse.button & 8 ? 5 : 1));
+				const direction = (mouse.button & 1) === 0 ? -1 : 1;
+				const wheelLines = wheelStepLines(viewport, direction);
+				viewport.scrollBy(direction * wheelLines * (mouse.button & 8 ? 5 : 1));
 				return { consume: true };
 			}
 			return undefined;
@@ -76,7 +93,18 @@ export function createQuestionDock(tui: TUI, question: Component, getMainWidth: 
 			viewport.scrollBy((up ? -1 : 1) * Math.max(1, viewport.getPrimaryScrollView().viewportHeight - 4));
 		}
 		return { consume: true };
-	});
+	};
+	const removeInputListener = tui.addInputListener(handleDockInput);
+	// Pi's viewport listener steps its wheel accelerator before deferring unhandled
+	// wheels here. Run ahead of it so a consumed wheel steps the accelerator exactly
+	// once; unsubscribe removes the listener without disturbing other listener order.
+	const listeners = (tui as unknown as { inputListeners?: Set<typeof handleDockInput> }).inputListeners;
+	if (listeners instanceof Set && listeners.delete(handleDockInput)) {
+		const existingListeners = [...listeners];
+		listeners.clear();
+		listeners.add(handleDockInput);
+		for (const listener of existingListeners) listeners.add(listener);
+	}
 	return {
 		component,
 		space,

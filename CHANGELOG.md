@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Restore transcript mouse-wheel scrolling while a questionnaire is docked on Pi 0.99+, which replaced the public `wheelScrollLines` renderer property with a private velocity-aware wheel accelerator. Read the effective step from either shape, step the accelerator exactly once per consumed wheel by listening ahead of Pi's viewport listener, and fall back to one line when no step is exposed.
 - Dock `rpiv-ask-user-question` questionnaires below the conversation in fullscreen mode, reserving at most half the terminal height and allowing transcript mouse-wheel and PageUp/PageDown scrolling without taking focus from the answer. Preserve collapse, close, nested-overlay, and sidebar-hidden behavior.
 
 - Fix a fullscreen Sidebar crash when its scrollbar becomes visible by applying `scrollbarThumb` as a foreground color, not a background color. Add real dark/light theme coverage for normal and active scrollbar painting.
